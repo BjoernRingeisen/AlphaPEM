@@ -753,6 +753,30 @@ const DEFAULT_LAMBDA_CONSTITUTIVE_EPS = 1.0e-8
 const DEFAULT_NEGATIVE_EVENT_FLOOR = 1.0e-5
 const DEFAULT_LAMBDA_INVENTORY_EPS = 1.0e-4
 const DEFAULT_EOD_DONOR_LAMBDA_SCALE = 0.25
+const DEFAULT_S_EVAP_INVENTORY_EPS = 1.0e-8
+
+"""Availability factor for evaporation from the raw liquid saturation.
+
+Zero at non-positive saturation; s / (s + inventory_eps) for positive saturation.
+The factor is continuous at zero and smooth for positive saturation. It limits
+only the water-removing phase-transfer rate, without changing the solver state.
+The default transition scale follows an extension based on AlphaPEM V1.3 and requires validation in the
+integrated Julia model. This factor alone does not guarantee discrete positivity.
+"""
+function _evaporation_inventory_limiter(
+        s,
+        inventory_eps=DEFAULT_S_EVAP_INVENTORY_EPS)
+    if !isfinite(inventory_eps) || inventory_eps <= 0.0
+        throw(ArgumentError(
+            "The evaporation inventory epsilon must be finite and positive."))
+    end
+
+    if s <= 0.0
+        return 0.0
+    end
+
+    return s / (s + inventory_eps)
+end
 
 
 """This function returns a smooth non-negative continuation of max(value, 0).
@@ -930,7 +954,8 @@ function Svl(element::Symbol,
              Ctot,
              T,
              epsilon::Float64,
-             pp::PhysicalParams)
+             pp::PhysicalParams;
+             s_evap_inventory_eps=DEFAULT_S_EVAP_INVENTORY_EPS)
 
     # Extraction of the parameters
     gamma_cond, gamma_evap = pp.gamma_cond, pp.gamma_evap
@@ -957,7 +982,16 @@ function Svl(element::Symbol,
     K_transition = 3e-3 # This is a constant that defines the sharpness of the transition between two states.
     w = 0.5 * (1 + tanh(K_transition * (Psat_eff - P_v))) # Transition function.
 
-    return w * Svl_evap + (1 - w) * Svl_cond # Interpolation between condensation and evaporation.
+    Svl_value = w * Svl_evap + (1 - w) * Svl_cond
+
+    # Use raw saturation for donor availability. The returned rate is shared by
+    # the liquid/vapor balances and the corresponding phase-change heat source.
+    if Svl_value < 0.0
+        return Svl_value *
+               _evaporation_inventory_limiter(s, s_evap_inventory_eps)
+    end
+
+    return Svl_value
 end
 
 
