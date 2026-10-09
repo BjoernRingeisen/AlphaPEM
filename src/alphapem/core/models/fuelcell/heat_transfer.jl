@@ -24,6 +24,9 @@ S_abs : MEASorptionSources
     Typed water absorption/desorption rates between the CL pores and the CL ionomer (mol.m-3.s-1).
 Sl : MEALiquidSources{NB_GDL, NB_MPL}
     Typed liquid water phase-change source terms at each porous-layer node (mol.m-3.s-1).
+multireaction_heat : Union{Nothing, MEAReactionHeat}
+    Local HOR/ORR reaction heat for multireaction mode. `nothing` selects the
+    legacy current/overpotential closure.
 
 Returns
 -------
@@ -38,7 +41,8 @@ function calculate_heat_transfers!(heat_work::MEAHeatWorkspace,
                                    fc::AbstractFuelCell,
                                    cfg::SimulationConfig,
                                    S_abs::MEASorptionSources,
-                                   Sl::MEALiquidSources{NB_GDL, NB_MPL}
+                                   Sl::MEALiquidSources{NB_GDL, NB_MPL};
+                                   multireaction_heat::Union{Nothing, MEAReactionHeat}=nothing
                                    )::MEAHeatFlows1D{NB_GDL, NB_MPL} where {NB_GDL, NB_MPL}
 
     # ___________________________________________________Preliminaries__________________________________________________
@@ -115,10 +119,10 @@ function calculate_heat_transfers!(heat_work::MEAHeatWorkspace,
     #    It is given by the sum of Peltier and activation heats [vetterFreeOpenReference2019].
     S_r_acl = i_fc / (2 * F * Hacl)  # mol.m-3.s-1. It is the amount of hydrogen consumed at the ACL.
     S_r_ccl = i_fc / (4 * F * Hccl)  # mol.m-3.s-1. It is the amount of oxygen consumed at the CCL.
-    Q_r = MEAReactionHeat(
+    Q_r = multireaction_heat === nothing ? MEAReactionHeat(
         S_r_acl * T_acl * (-delta_s_HOR), # Q_r_acl
         S_r_ccl * T_ccl * (-delta_s_ORR) + i_fc * eta_c / Hccl # Q_r_ccl (Peltier + activation heat)
-    )
+    ) : multireaction_heat
 
     # The heat source/sink by the absorption/desorption of water in the CL ionomer, in J.m-3.s-1.
     Q_sorp = MEASorptionHeat(

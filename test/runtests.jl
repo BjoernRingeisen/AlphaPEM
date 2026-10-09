@@ -51,10 +51,18 @@ end
     @test oc.Sa > 0.0
     @test oc.Sc > 0.0
 
+    legacy_scaling = CellStateScaling(10.0, 70.0, 10.0, 50.0, 350.0, 10.0, 0.3, 0.1)
+    @test legacy_scaling.phi == 1.0
+    @test legacy_scaling.s == 0.1
+
     # SimulationConfig default construction and validation
     cfg = SimulationConfig()
     @test cfg.type_fuel_cell == :ZSW_nominal
+    @test cfg.electrochemistry_model == :legacy
     @test validate_config(cfg) === cfg
+
+    cfg_multireaction = SimulationConfig(electrochemistry_model=:multireaction_potential)
+    @test validate_config(cfg_multireaction) === cfg_multireaction
 
     # Custom configuration
     cfg_custom = SimulationConfig(
@@ -68,6 +76,7 @@ end
 
     # Invalid configuration should error
     @test_throws ErrorException validate_config(SimulationConfig(type_purge = :unknown_purge))
+    @test_throws ErrorException validate_config(SimulationConfig(electrochemistry_model=:unknown))
 end
 
 @testset "Fuelcell" begin

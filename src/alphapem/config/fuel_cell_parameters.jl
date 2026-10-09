@@ -226,6 +226,11 @@ Base.@kwdef struct OperatingConditions <: AbstractFuelCellParams
     Phi_a_des::Float64 = 0.4        # Desired anode relative humidity
     Phi_c_des::Float64 = 0.6        # Desired cathode relative humidity
     y_H2_in::Float64 = 0.8          # Molar fraction of H2 in the dry anode gas mixture (H2/N2) injected at the inlet
+    y_O2_anode_in::Float64 = 0.0   # Dry anode O2 fraction; displaces N2 (transport only).
+    y_CO2_anode_in::Float64 = 0.0
+    y_CO2_cathode_in::Float64 = 0.0
+    y_H2_cathode_in::Float64 = 0.0  # Dry cathode H2 fraction; displaces N2 (transport only).
+    anode_flow_mode::Symbol = :hydrogen_stoichiometric # Or :equivalent_air during startup feed transitions.
     i_min_stoich::Float64 = 0.5     # Minimum current density used to compute the desired flows (A.cm-2)
 end
 
@@ -343,3 +348,41 @@ Base.@kwdef struct PolaExperimentalData <: AbstractFuelCellParams
 end
 
 
+
+"""Validate gas feed fractions for the transport extension.
+
+A hydrogen-free anode feed is supported only by the local multireaction model
+without auxiliaries. This is the air/air startup state; legacy kinetics still
+requires hydrogen at the anode.
+"""
+function validate_gas_feed(oc::OperatingConditions, type_auxiliary::Symbol=:no_auxiliary,
+                           electrochemistry_model::Symbol=:legacy)
+    oc.anode_flow_mode in (:hydrogen_stoichiometric, :equivalent_air) ||
+        throw(ArgumentError("anode_flow_mode must be :hydrogen_stoichiometric or :equivalent_air."))
+    isfinite(oc.y_H2_in) && 0 <= oc.y_H2_in <= 1 ||
+        throw(ArgumentError("y_H2_in must be finite and in [0, 1]."))
+    for y in (oc.y_CO2_anode_in,oc.y_CO2_cathode_in)
+        isfinite(y) && 0 <= y <= 1 || throw(ArgumentError("Invalid CO₂ inlet fraction"))
+    end
+    oc.y_H2_in+oc.y_O2_anode_in+oc.y_CO2_anode_in <= 1 || throw(ArgumentError("Anode dry fractions exceed one"))
+    y_O2_ext+oc.y_H2_cathode_in+oc.y_CO2_cathode_in <= 1 || throw(ArgumentError("Cathode dry fractions exceed one"))
+    (oc.y_CO2_anode_in == 0 && oc.y_CO2_cathode_in == 0 || type_auxiliary == :no_auxiliary) || throw(ArgumentError("CO₂ feeds require no_auxiliary"))
+    isfinite(oc.y_O2_anode_in) && 0 <= oc.y_O2_anode_in && oc.y_H2_in + oc.y_O2_anode_in <= 1 ||
+        throw(ArgumentError("Anode H2 and O2 dry fractions must be nonnegative and sum to at most one."))
+    isfinite(oc.y_H2_cathode_in) && 0 <= oc.y_H2_cathode_in && y_O2_ext + oc.y_H2_cathode_in <= 1 ||
+        throw(ArgumentError("Cathode H2 must be finite, nonnegative and leave room for the air oxygen fraction."))
+    if type_auxiliary != :no_auxiliary &&
+       (oc.y_O2_anode_in > 0 || oc.y_H2_cathode_in > 0)
+        throw(ArgumentError("Additional gas feeds currently require type_auxiliary=:no_auxiliary."))
+    end
+    if oc.y_H2_in == 0 &&
+       !(electrochemistry_model == :multireaction_potential &&
+         type_auxiliary == :no_auxiliary && oc.y_O2_anode_in > 0)
+        throw(ArgumentError("A hydrogen-free anode feed requires multireaction electrochemistry, " *
+                            "type_auxiliary=:no_auxiliary, and a positive anode O2 fraction."))
+    end
+    if oc.anode_flow_mode == :equivalent_air && type_auxiliary != :no_auxiliary
+        throw(ArgumentError("Equivalent-air anode flow currently requires type_auxiliary=:no_auxiliary."))
+    end
+    return oc
+end

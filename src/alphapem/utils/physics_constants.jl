@@ -44,3 +44,5 @@ const tau_hum::Float64     = 5                 # s. It is the humidifier time co
 const Kp_T::Float64        = 5e-8              # m².s-1.Pa-1. It is the proportional constant of the PD controller at the back pressure valve.
 const Kd_T::Float64        = 1e-8              # m².Pa-1. It is the derivative constant of the PD controller at the back pressure valve.
 
+
+const M_CO2::Float64 = 0.04401 # kg/mol

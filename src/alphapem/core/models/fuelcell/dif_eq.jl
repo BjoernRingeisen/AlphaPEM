@@ -170,35 +170,16 @@ function dae_residual!(res::Vector{Float64}, dydt_IDA::Vector{Float64}, y::Vecto
     # Calculation of the dynamic evolutions inside the MEA.
     @inbounds for i in 1:nb_gc
         dif_eq_int_values_i = calculate_dif_eq_int_values(t, sv_cell_1D[i], fc, cfg, sv_manifold_1D, sv_auxiliary)
+        multireaction_i = cfg.electrochemistry_model == :multireaction_potential ?
+                          calculate_multireaction_coupling(sv_cell_1D[i], i_fc[i], C_O2_Pt[i], fc, cfg) : nothing
         heat_flows_i = calculate_heat_transfers!(heat_work, heat_int_work, sv_cell_1D[i], i_fc[i], fc, cfg, flows_1D_MEA[i].S_abs,
-                                                flows_1D_MEA[i].Sl)
+                                                flows_1D_MEA[i].Sl;
+                                                multireaction_heat=multireaction_i === nothing ? nothing : multireaction_i.heat)
 
         dif_eq_mea_diss_water_i = calculate_dyn_dissoved_water_evolution_inside_MEA(sv_cell_1D[i], pp,
                                                                                       flows_1D_MEA[i].S_abs,
                                                                                       flows_1D_MEA[i].J_lambda,
-                                                                                      flows_1D_MEA[i].Sp)
-        dif_eq_mea_liq_water_i = calculate_dyn_liquid_water_evolution_inside_MEA(sv_cell_1D[i],
-                                                                                   pp,
-                                                                                   flows_1D_MEA[i].Jl,
-                                                                                   flows_1D_MEA[i].S_abs,
-                                                                                   flows_1D_MEA[i].Sl)
-        dif_eq_mea_vapor_water_i = calculate_dyn_vapor_evolution_inside_MEA(sv_cell_1D[i],
-                                                                             pp,
-                                                                             flows_1D_MEA[i].Jv,
-                                                                             flows_1D_MEA[i].Sv,
-                                                                             flows_1D_MEA[i].S_abs)
-        dif_eq_mea_species_i = calculate_dyn_H2_O2_N2_evolution_inside_MEA(sv_cell_1D[i],
-                                                                           pp,
-                                                                           flows_1D_MEA[i].J_H2,
-                                                                           flows_1D_MEA[i].J_O2,
-                                                                           flows_1D_MEA[i].J_N2,
-                                                                           flows_1D_MEA[i].S_H2,
-                                                                           flows_1D_MEA[i].S_O2)
-        dif_eq_voltage_i = calculate_dyn_voltage_evolution(i_fc[i], C_O2_Pt[i],
-                                                            sv_cell_1D[i].ccl.T,
-                                                            sv_cell_1D[i].ccl.eta_c,
-                                                            pp,
-                                                            dif_eq_int_values_i.i_n)
+                                                                                      multireaction_i === nothing ? flows_1D_MEA[i].Sp : multireaction_i.water)
         dif_eq_mea_temperature_i = calculate_dyn_temperature_evolution_inside_MEA(dif_eq_int_values_i.rho_Cp0,
                                                                                    pp,
                                                                                    heat_flows_i.Jt,
@@ -207,26 +188,66 @@ function dae_residual!(res::Vector{Float64}, dydt_IDA::Vector{Float64}, y::Vecto
                                                                                    heat_flows_i.Q_liq,
                                                                                    heat_flows_i.Q_p,
                                                                                    heat_flows_i.Q_e)
-
+        cl_porosity_derivative_i = (
+            acl=cl_porosity_rate(:acl, sv_cell_1D[i].acl.lambda, sv_cell_1D[i].acl.T,
+                pp.Hacl, pp, dif_eq_mea_diss_water_i.acl_lambda,
+                dif_eq_mea_temperature_i.acl_T),
+            ccl=cl_porosity_rate(:ccl, sv_cell_1D[i].ccl.lambda, sv_cell_1D[i].ccl.T,
+                pp.Hccl, pp, dif_eq_mea_diss_water_i.ccl_lambda,
+                dif_eq_mea_temperature_i.ccl_T))
+        dif_eq_mea_liq_water_i = calculate_dyn_liquid_water_evolution_inside_MEA(sv_cell_1D[i],
+            pp,flows_1D_MEA[i].Jl,flows_1D_MEA[i].S_abs,flows_1D_MEA[i].Sl;
+            temperature_derivative=dif_eq_mea_temperature_i,
+            cl_porosity_derivative=cl_porosity_derivative_i)
+        dif_eq_mea_vapor_water_i = calculate_dyn_vapor_evolution_inside_MEA(sv_cell_1D[i],
+                                                                             pp,
+                                                                             flows_1D_MEA[i].Jv,
+                                                                             flows_1D_MEA[i].Sv,
+                                                                             flows_1D_MEA[i].S_abs;
+                                                                             liquid_derivative=dif_eq_mea_liq_water_i,
+                                                                             cl_porosity_derivative=cl_porosity_derivative_i)
+        dif_eq_mea_species_i = calculate_dyn_H2_O2_N2_evolution_inside_MEA(sv_cell_1D[i],
+                                                                           pp,
+                                                                           flows_1D_MEA[i].J_H2,
+                                                                           flows_1D_MEA[i].J_O2,
+                                                                           flows_1D_MEA[i].J_N2,
+                                                                           flows_1D_MEA[i].S_H2,
+                                                                           flows_1D_MEA[i].S_O2;
+                                                                           J_CO2=flows_1D_MEA[i].J_CO2,
+                                                                           multireaction_sources=multireaction_i === nothing ? nothing : multireaction_i.sources,
+                                                                           liquid_derivative=dif_eq_mea_liq_water_i,
+                                                                           cl_porosity_derivative=cl_porosity_derivative_i)
+        dif_eq_voltage_i = if multireaction_i === nothing
+            calculate_dyn_voltage_evolution(i_fc[i], C_O2_Pt[i],
+                                            sv_cell_1D[i].ccl.T,
+                                            sv_cell_1D[i].ccl.eta_c,
+                                            pp,
+                                            dif_eq_int_values_i.i_n)
+        else
+            multireaction_i.voltage
+        end
         dif_eq_cell_1D[i] = assemble_mea_derivative_1D(dif_eq_mea_diss_water_i,
                                                        dif_eq_mea_liq_water_i,
                                                        dif_eq_mea_vapor_water_i,
                                                        dif_eq_mea_species_i,
                                                        dif_eq_voltage_i,
-                                                       dif_eq_mea_temperature_i)
+                                                       dif_eq_mea_temperature_i;
+                                                       pt_rates=multireaction_i === nothing ?
+                                                           ((0.0,0.0,0.0),(0.0,0.0,0.0)) : multireaction_i.pt_rates)
     end
 
     #       Inside the gas channels: compute independent GC contributions, then assemble once.
-    dif_eq_gc_gas = calculate_dyn_gas_evolution_inside_gas_channel(sv_cell_1D,
-                                                                    pp,
-                                                                    cfg,
-                                                                    flows_1D_GC_manifold,
-                                                                    flows_1D_MEA)
     dif_eq_gc_liq = calculate_dyn_liq_evolution_inside_gas_channel(T_des,
                                                                     pp,
                                                                     cfg,
                                                                     flows_1D_GC_manifold,
                                                                     flows_1D_MEA)
+    dif_eq_gc_gas = calculate_dyn_gas_evolution_inside_gas_channel(sv_cell_1D,
+                                                                    pp,
+                                                                    cfg,
+                                                                    flows_1D_GC_manifold,
+                                                                    flows_1D_MEA;
+                                                                    liquid_derivative=dif_eq_gc_liq)
     dif_eq_gc_temperature = calculate_dyn_temperature_evolution_inside_gas_channel(nb_gc)
     dif_eq_cell_1D = assemble_gc_derivative_1D(dif_eq_cell_1D,
                                                dif_eq_gc_gas,

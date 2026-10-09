@@ -258,8 +258,16 @@ DesiredInletFlows
         # inlet-flow residuals and the CL/membrane state, causing severe solver slowdowns.
         i_eff = effective_stoich_current(i_fc_cell, i_min_stoich) + max_i_n
 
-        # At the anode side
-        W_H2_des        = 1 / y_H2_in * Sa * i_eff / (2 * F) * (nb_cell * Aact)
+        # At the anode side. During air/air startup, the historical `H2` field
+        # carries the total dry-anode-feed flow; the species split is applied
+        # later from the configured inlet fractions.
+        W_H2_des = if oc.anode_flow_mode == :equivalent_air
+            1 / y_O2_ext * Sa * i_eff / (4 * F) * (nb_cell * Aact)
+        elseif y_H2_in > 0
+            1 / y_H2_in * Sa * i_eff / (2 * F) * (nb_cell * Aact)
+        else
+            1 / oc.y_O2_anode_in * Sa * i_eff / (4 * F) * (nb_cell * Aact)
+        end
         W_H2O_inj_a_des = (Phi_a_des * Psat(T_des) / (Pa_in - Phi_a_des * Psat(T_des))) * W_H2_des
 
         # At the cathode side

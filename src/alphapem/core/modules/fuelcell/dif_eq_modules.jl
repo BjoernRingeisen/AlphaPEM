@@ -39,9 +39,13 @@ function calculate_dif_eq_int_values(t::Float64,
     C_O2_cgdl, C_O2_cgc = getproperty.(sv.cgdl, :C_O2), sv.cgc.C_O2
 
     C_N2_agc, C_N2_agdl = sv.agc.C_N2, getproperty.(sv.agdl, :C_N2)
+    C_O2_agc, C_O2_agdl = sv.agc.C_O2, getproperty.(sv.agdl, :C_O2)
     C_N2_ampl, C_N2_acl = getproperty.(sv.ampl, :C_N2), sv.acl.C_N2
+    C_O2_ampl, C_O2_acl = getproperty.(sv.ampl, :C_O2), sv.acl.C_O2
     C_N2_ccl, C_N2_cmpl = sv.ccl.C_N2, getproperty.(sv.cmpl, :C_N2)
+    C_H2_ccl, C_H2_cmpl = sv.ccl.C_H2, getproperty.(sv.cmpl, :C_H2)
     C_N2_cgdl, C_N2_cgc = getproperty.(sv.cgdl, :C_N2), sv.cgc.C_N2
+    C_H2_cgdl, C_H2_cgc = getproperty.(sv.cgdl, :C_H2), sv.cgc.C_H2
 
     lambda_acl, lambda_mem, lambda_ccl = sv.acl.lambda, sv.mem.lambda, sv.ccl.lambda
 
@@ -58,20 +62,22 @@ function calculate_dif_eq_int_values(t::Float64,
 
     # Physical quantities inside the stack
     #       Pressures
-    P_agc = (C_v_agc + C_H2_agc + C_N2_agc) * R * T_agc
-    P_cgc = (C_v_cgc + C_O2_cgc + C_N2_cgc) * R * T_cgc
+    P_agc = (C_v_agc + C_H2_agc + C_N2_agc + C_O2_agc + sv.agc.C_CO2) * R * T_agc
+    P_cgc = (C_v_cgc + C_O2_cgc + C_N2_cgc + C_H2_cgc + sv.cgc.C_CO2) * R * T_cgc
 
     #       Total concentration
-    C_tot_agc = C_v_agc + C_H2_agc + C_N2_agc
-    C_tot_cgc = C_v_cgc + C_O2_cgc + C_N2_cgc
+    C_tot_agc = C_v_agc + C_H2_agc + C_N2_agc + C_O2_agc + sv.agc.C_CO2
+    C_tot_cgc = C_v_cgc + C_O2_cgc + C_N2_cgc + C_H2_cgc + sv.cgc.C_CO2
 
     #       Molar masses
-    M_agc = C_v_agc * R * T_des / P_agc * M_H2O +
-            C_H2_agc * R * T_des / P_agc * M_H2 +
-            C_N2_agc * R * T_des / P_agc * M_N2
-    M_cgc = C_v_cgc * R * T_des / P_cgc * M_H2O +
-            C_O2_cgc * R * T_des / P_cgc * M_O2 +
-            C_N2_cgc * R * T_des / P_cgc * M_N2
+    M_agc = C_v_agc * R * T_agc / P_agc * M_H2O +
+            C_H2_agc * R * T_agc / P_agc * M_H2 +
+            C_N2_agc * R * T_agc / P_agc * M_N2 +
+            C_O2_agc * R * T_agc / P_agc * M_O2 + sv.agc.C_CO2*R*T_agc/P_agc*M_CO2
+    M_cgc = C_v_cgc * R * T_cgc / P_cgc * M_H2O +
+            C_O2_cgc * R * T_cgc / P_cgc * M_O2 +
+            C_N2_cgc * R * T_cgc / P_cgc * M_N2 +
+            C_H2_cgc * R * T_cgc / P_cgc * M_H2 + sv.cgc.C_CO2*R*T_cgc/P_cgc*M_CO2
 
     #       Density of the gas mixture.
     rho_agc = P_agc / (R * T_agc) * M_agc
@@ -82,28 +88,28 @@ function calculate_dif_eq_int_values(t::Float64,
     x_H2O_v_cgc, x_O2_cgc, x_N2_cgc = C_v_cgc / C_tot_cgc, C_O2_cgc / C_tot_cgc, C_N2_cgc / C_tot_cgc
 
     #       Dynamic viscosity of the gas mixture.
-    mu_gaz_agc = mu_mixture_gases(:H2O_v, x_H2O_v_agc, :H2, x_H2_agc, :N2, x_N2_agc, T_agc)
-    mu_gaz_cgc = mu_mixture_gases(:H2O_v, x_H2O_v_cgc, :O2, x_O2_cgc, :N2, x_N2_cgc, T_cgc)
+    mu_gaz_agc = mu_mixture_gases(:H2O_v, x_H2O_v_agc, :H2, x_H2_agc, :N2, x_N2_agc, :O2, C_O2_agc/C_tot_agc, :CO2,sv.agc.C_CO2/C_tot_agc, T_agc)
+    mu_gaz_cgc = mu_mixture_gases(:H2O_v, x_H2O_v_cgc, :O2, x_O2_cgc, :N2, x_N2_cgc, :H2, C_H2_cgc/C_tot_cgc, :CO2,sv.cgc.C_CO2/C_tot_cgc, T_cgc)
 
     #       Volumetric heat capacity (J.m-3.K-1)
     rho_Cp0_agdl = ntuple(i -> calculate_rho_Cp0(:agdl, T_agdl[i], C_v_agdl[i],
-                                                 s_agdl[i], nothing, C_H2_agdl[i], nothing, C_N2_agdl[i],
-                                                 epsilon_gdl, nothing, pp), nb_gdl)
+                                                 s_agdl[i], nothing, C_H2_agdl[i], C_O2_agdl[i], C_N2_agdl[i],
+                                                 epsilon_gdl, nothing, pp; C_CO2=sv.agdl[i].C_CO2), nb_gdl)
     rho_Cp0_ampl = ntuple(i -> calculate_rho_Cp0(:ampl, T_ampl[i], C_v_ampl[i],
-                                                 s_ampl[i], nothing, C_H2_ampl[i], nothing, C_N2_ampl[i],
-                                                 epsilon_mpl, nothing, pp), nb_mpl)
-    rho_Cp0_acl = calculate_rho_Cp0(:acl, T_acl, C_v_acl, s_acl, lambda_acl, C_H2_acl, nothing, C_N2_acl,
-                                    nothing, Hacl, pp)
+                                                 s_ampl[i], nothing, C_H2_ampl[i], C_O2_ampl[i], C_N2_ampl[i],
+                                                 epsilon_mpl, nothing, pp; C_CO2=sv.ampl[i].C_CO2), nb_mpl)
+    rho_Cp0_acl = calculate_rho_Cp0(:acl, T_acl, C_v_acl, s_acl, lambda_acl, C_H2_acl, C_O2_acl, C_N2_acl,
+                                    nothing, Hacl, pp; C_CO2=sv.acl.C_CO2)
     rho_Cp0_mem = calculate_rho_Cp0(:mem, T_mem, nothing, nothing, lambda_mem, nothing, nothing, nothing,
                                     nothing, nothing, pp)
-    rho_Cp0_ccl = calculate_rho_Cp0(:ccl, T_ccl, C_v_ccl, s_ccl, lambda_ccl, nothing, C_O2_ccl,
-                                    C_N2_ccl, nothing, Hccl, pp)
+    rho_Cp0_ccl = calculate_rho_Cp0(:ccl, T_ccl, C_v_ccl, s_ccl, lambda_ccl, C_H2_ccl, C_O2_ccl,
+                                    C_N2_ccl, nothing, Hccl, pp; C_CO2=sv.ccl.C_CO2)
     rho_Cp0_cmpl = ntuple(i -> calculate_rho_Cp0(:cmpl, T_cmpl[i], C_v_cmpl[i],
-                                                 s_cmpl[i], nothing, nothing, C_O2_cmpl[i], C_N2_cmpl[i],
-                                                 epsilon_mpl, nothing, pp), nb_mpl)
+                                                 s_cmpl[i], nothing, C_H2_cmpl[i], C_O2_cmpl[i], C_N2_cmpl[i],
+                                                 epsilon_mpl, nothing, pp; C_CO2=sv.cmpl[i].C_CO2), nb_mpl)
     rho_Cp0_cgdl = ntuple(i -> calculate_rho_Cp0(:cgdl, T_cgdl[i], C_v_cgdl[i],
-                                                 s_cgdl[i], nothing, nothing, C_O2_cgdl[i], C_N2_cgdl[i],
-                                                 epsilon_gdl, nothing, pp), nb_gdl)
+                                                 s_cgdl[i], nothing, C_H2_cgdl[i], C_O2_cgdl[i], C_N2_cgdl[i],
+                                                 epsilon_gdl, nothing, pp; C_CO2=sv.cgdl[i].C_CO2), nb_gdl)
     rho_Cp0 = MEAThermalIntermediates{nb_gdl, nb_mpl}(rho_Cp0_agdl, rho_Cp0_ampl, rho_Cp0_acl,
                                                       rho_Cp0_mem, rho_Cp0_ccl, rho_Cp0_cmpl, rho_Cp0_cgdl)
 
@@ -258,6 +264,13 @@ function canonical_cell_solver_variable_names_1D(nb_gdl::Int, nb_mpl::Int)::Vect
         ["T_acl", "T_mem", "T_ccl"], ["T_cmpl_$(i)" for i in 1:nb_mpl], ["T_cgdl_$(i)" for i in 1:nb_gdl], ["T_cgc"],
 
         ["eta_c"],
+        ["C_O2_agc"], ["C_O2_agdl_$(i)" for i in 1:nb_gdl], ["C_O2_ampl_$(i)" for i in 1:nb_mpl], ["C_O2_acl"],
+        ["C_H2_ccl"], ["C_H2_cmpl_$(i)" for i in 1:nb_mpl], ["C_H2_cgdl_$(i)" for i in 1:nb_gdl], ["C_H2_cgc"],
+        ["phi_a", "phi_c"],
+        ["theta_PtOH_acl", "theta_Pt_sO_acl", "theta_Pt_bO_acl",
+         "theta_PtOH_ccl", "theta_Pt_sO_ccl", "theta_Pt_bO_ccl"],
+        ["C_CO2_agc"], ["C_CO2_agdl_$(i)" for i in 1:nb_gdl], ["C_CO2_ampl_$(i)" for i in 1:nb_mpl],
+        ["C_CO2_acl", "C_CO2_ccl"], ["C_CO2_cmpl_$(i)" for i in 1:nb_mpl], ["C_CO2_cgdl_$(i)" for i in 1:nb_gdl], ["C_CO2_cgc"],
     )
 end
 
@@ -342,8 +355,11 @@ function cell_state_scale(name::AbstractString, scaling::CellStateScaling)::Floa
     startswith(name, "C_H2_")    && return scaling.C_H2
     startswith(name, "C_O2_")    && return scaling.C_O2
     startswith(name, "C_N2_")    && return scaling.C_N2
+    startswith(name, "C_CO2_")   && return scaling.C_CO2
     startswith(name, "T_")       && return scaling.T
     name == "eta_c"              && return scaling.eta_c
+    (name == "phi_a" || name == "phi_c") && return scaling.phi
+    startswith(name, "theta_Pt") && return 1.0
     throw(ArgumentError("Unknown canonical cell state variable name: \"$name\""))
 end
 
@@ -584,6 +600,12 @@ if @isdefined(CellState1D)
 end
 
 @inline function _unpack_cell_state_1D(values::AbstractVector{<:Real}, ::Val{N_GDL}, ::Val{N_MPL}) where {N_GDL, N_MPL}
+    expected = fieldcount(AnodeGCState) + fieldcount(CathodeGCState) +
+               N_GDL * (fieldcount(AnodeGDLState) + fieldcount(CathodeGDLState)) +
+               N_MPL * (fieldcount(AnodeMPLState) + fieldcount(CathodeMPLState)) +
+               fieldcount(AnodeCLState) + fieldcount(CathodeCLState) + fieldcount(MembraneState)
+    length(values) == expected || throw(ArgumentError(
+        "Invalid state segment length: expected $expected entries including anode O2 and cathode H2; got $(length(values))."))
     idx = Ref(1)
 
     @inline read_scalar!() = begin
@@ -642,19 +664,39 @@ end
     T_cgdl = read_block!(Val(N_GDL))
     T_cgc = read_scalar!()
     eta_c = read_scalar!()
+    C_O2_agc = read_scalar!()
+    C_O2_agdl = read_block!(Val(N_GDL))
+    C_O2_ampl = read_block!(Val(N_MPL))
+    C_O2_acl = read_scalar!()
+    C_H2_ccl = read_scalar!()
+    C_H2_cmpl = read_block!(Val(N_MPL))
+    C_H2_cgdl = read_block!(Val(N_GDL))
+    C_H2_cgc = read_scalar!()
+    phi_a = read_scalar!()
+    phi_c = read_scalar!()
+    pt_a = ntuple(_ -> read_scalar!(), 3)
+    pt_c = ntuple(_ -> read_scalar!(), 3)
+    C_CO2_agc = read_scalar!()
+    C_CO2_agdl = read_block!(Val(N_GDL))
+    C_CO2_ampl = read_block!(Val(N_MPL))
+    C_CO2_acl = read_scalar!()
+    C_CO2_ccl = read_scalar!()
+    C_CO2_cmpl = read_block!(Val(N_MPL))
+    C_CO2_cgdl = read_block!(Val(N_GDL))
+    C_CO2_cgc = read_scalar!()
 
     idx[] == length(values) + 1 ||
         throw(ArgumentError("Invalid 1D state segment length while unpacking solver vector."))
 
-    agc = AnodeGCState(T_agc, C_v_agc, s_agc, C_H2_agc, C_N2_agc)
-    agdl = ntuple(i -> AnodeGDLState(T_agdl[i], C_v_agdl[i], s_agdl[i], C_H2_agdl[i], C_N2_agdl[i]), Val(N_GDL))
-    ampl = ntuple(i -> AnodeMPLState(T_ampl[i], C_v_ampl[i], s_ampl[i], C_H2_ampl[i], C_N2_ampl[i]), Val(N_MPL))
-    acl = AnodeCLState(T_acl, C_v_acl, s_acl, lambda_acl, C_H2_acl, C_N2_acl)
+    agc = AnodeGCState(T_agc, C_v_agc, s_agc, C_H2_agc, C_N2_agc, C_O2_agc, C_CO2_agc)
+    agdl = ntuple(i -> AnodeGDLState(T_agdl[i], C_v_agdl[i], s_agdl[i], C_H2_agdl[i], C_N2_agdl[i], C_O2_agdl[i], C_CO2_agdl[i]), Val(N_GDL))
+    ampl = ntuple(i -> AnodeMPLState(T_ampl[i], C_v_ampl[i], s_ampl[i], C_H2_ampl[i], C_N2_ampl[i], C_O2_ampl[i], C_CO2_ampl[i]), Val(N_MPL))
+    acl = AnodeCLState(T_acl, C_v_acl, s_acl, lambda_acl, C_H2_acl, C_N2_acl, C_O2_acl, phi_a, pt_a..., C_CO2_acl)
     mem = MembraneState(T_mem, lambda_mem)
-    ccl = CathodeCLState(T_ccl, C_v_ccl, s_ccl, lambda_ccl, C_O2_ccl, C_N2_ccl, eta_c)
-    cmpl = ntuple(i -> CathodeMPLState(T_cmpl[i], C_v_cmpl[i], s_cmpl[i], C_O2_cmpl[i], C_N2_cmpl[i]), Val(N_MPL))
-    cgdl = ntuple(i -> CathodeGDLState(T_cgdl[i], C_v_cgdl[i], s_cgdl[i], C_O2_cgdl[i], C_N2_cgdl[i]), Val(N_GDL))
-    cgc = CathodeGCState(T_cgc, C_v_cgc, s_cgc, C_O2_cgc, C_N2_cgc)
+    ccl = CathodeCLState(T_ccl, C_v_ccl, s_ccl, lambda_ccl, C_O2_ccl, C_N2_ccl, eta_c, C_H2_ccl, phi_c, pt_c..., C_CO2_ccl)
+    cmpl = ntuple(i -> CathodeMPLState(T_cmpl[i], C_v_cmpl[i], s_cmpl[i], C_O2_cmpl[i], C_N2_cmpl[i], C_H2_cmpl[i], C_CO2_cmpl[i]), Val(N_MPL))
+    cgdl = ntuple(i -> CathodeGDLState(T_cgdl[i], C_v_cgdl[i], s_cgdl[i], C_O2_cgdl[i], C_N2_cgdl[i], C_H2_cgdl[i], C_CO2_cgdl[i]), Val(N_GDL))
+    cgc = CathodeGCState(T_cgc, C_v_cgc, s_cgc, C_O2_cgc, C_N2_cgc, C_H2_cgc, C_CO2_cgc)
 
     return CellState1D{N_GDL, N_MPL}(agc, agdl, ampl, acl, mem, ccl, cmpl, cgdl, cgc)
 end
@@ -662,15 +704,15 @@ end
 """Create a derivative container initialized with NaN values."""
 function _nan_cell_derivative_1D(nb_gdl::Int, nb_mpl::Int)
     z = NaN
-    agc = AnodeGCDerivative(z, z, z, z, z)
-    agdl = ntuple(_ -> AnodeGDLDerivative(z, z, z, z, z), nb_gdl)
-    ampl = ntuple(_ -> AnodeMPLDerivative(z, z, z, z, z), nb_mpl)
-    acl = AnodeCLDerivative(z, z, z, z, z, z)
+    agc = AnodeGCDerivative(z, z, z, z, z, z, z)
+    agdl = ntuple(_ -> AnodeGDLDerivative(z, z, z, z, z, z, z), nb_gdl)
+    ampl = ntuple(_ -> AnodeMPLDerivative(z, z, z, z, z, z, z), nb_mpl)
+    acl = AnodeCLDerivative(z, z, z, z, z, z, z, z, z, z, z, z)
     mem = MembraneDerivative(z, z)
-    ccl = CathodeCLDerivative(z, z, z, z, z, z, z)
-    cmpl = ntuple(_ -> CathodeMPLDerivative(z, z, z, z, z), nb_mpl)
-    cgdl = ntuple(_ -> CathodeGDLDerivative(z, z, z, z, z), nb_gdl)
-    cgc = CathodeGCDerivative(z, z, z, z, z)
+    ccl = CathodeCLDerivative(z, z, z, z, z, z, z, z, z, z, z, z, z)
+    cmpl = ntuple(_ -> CathodeMPLDerivative(z, z, z, z, z, z, z), nb_mpl)
+    cgdl = ntuple(_ -> CathodeGDLDerivative(z, z, z, z, z, z, z), nb_gdl)
+    cgc = CathodeGCDerivative(z, z, z, z, z, z, z)
     return CellDerivative1D{nb_gdl, nb_mpl}(agc, agdl, ampl, acl, mem, ccl, cmpl, cgdl, cgc)
 end
 
@@ -678,60 +720,80 @@ end
 function _assert_cell_derivative_complete!(d::CellDerivative1D{nb_gdl, nb_mpl}) where {nb_gdl, nb_mpl}
     fail() = throw(ArgumentError("At least one derivative entry is missing (NaN sentinel detected)."))
 
+    isnan(d.agc.C_CO2) && fail()
     isnan(d.agc.C_v) && fail()
     isnan(d.agc.s) && fail()
     isnan(d.agc.C_H2) && fail()
     isnan(d.agc.C_N2) && fail()
+    isnan(d.agc.C_O2) && fail()
     isnan(d.agc.T) && fail()
 
     for i in 1:nb_gdl
-        isnan(d.agdl[i].C_v) && fail()
+        isnan(d.agdl[i].C_CO2) && fail()
+    isnan(d.agdl[i].C_v) && fail()
         isnan(d.agdl[i].s) && fail()
         isnan(d.agdl[i].C_H2) && fail()
         isnan(d.agdl[i].C_N2) && fail()
+        isnan(d.agdl[i].C_O2) && fail()
         isnan(d.agdl[i].T) && fail()
-        isnan(d.cgdl[i].C_v) && fail()
+        isnan(d.cgdl[i].C_CO2) && fail()
+    isnan(d.cgdl[i].C_v) && fail()
         isnan(d.cgdl[i].s) && fail()
         isnan(d.cgdl[i].C_O2) && fail()
         isnan(d.cgdl[i].C_N2) && fail()
+        isnan(d.cgdl[i].C_H2) && fail()
         isnan(d.cgdl[i].T) && fail()
     end
 
     for i in 1:nb_mpl
-        isnan(d.ampl[i].C_v) && fail()
+        isnan(d.ampl[i].C_CO2) && fail()
+    isnan(d.ampl[i].C_v) && fail()
         isnan(d.ampl[i].s) && fail()
         isnan(d.ampl[i].C_H2) && fail()
         isnan(d.ampl[i].C_N2) && fail()
+        isnan(d.ampl[i].C_O2) && fail()
         isnan(d.ampl[i].T) && fail()
-        isnan(d.cmpl[i].C_v) && fail()
+        isnan(d.cmpl[i].C_CO2) && fail()
+    isnan(d.cmpl[i].C_v) && fail()
         isnan(d.cmpl[i].s) && fail()
         isnan(d.cmpl[i].C_O2) && fail()
         isnan(d.cmpl[i].C_N2) && fail()
+        isnan(d.cmpl[i].C_H2) && fail()
         isnan(d.cmpl[i].T) && fail()
     end
 
+    isnan(d.acl.C_CO2) && fail()
     isnan(d.acl.C_v) && fail()
     isnan(d.acl.s) && fail()
     isnan(d.acl.lambda) && fail()
     isnan(d.acl.C_H2) && fail()
     isnan(d.acl.C_N2) && fail()
+    isnan(d.acl.C_O2) && fail()
+    isnan(d.acl.phi_a) && fail()
+    any(isnan, (d.acl.theta_PtOH, d.acl.theta_Pt_sO, d.acl.theta_Pt_bO)) && fail()
     isnan(d.acl.T) && fail()
 
     isnan(d.mem.lambda) && fail()
     isnan(d.mem.T) && fail()
 
+    isnan(d.ccl.C_CO2) && fail()
     isnan(d.ccl.C_v) && fail()
     isnan(d.ccl.s) && fail()
     isnan(d.ccl.lambda) && fail()
     isnan(d.ccl.C_O2) && fail()
     isnan(d.ccl.C_N2) && fail()
+    isnan(d.ccl.C_H2) && fail()
     isnan(d.ccl.T) && fail()
     isnan(d.ccl.eta_c) && fail()
+    isnan(d.ccl.phi_c) && fail()
+    any(isnan, (d.ccl.theta_PtOH, d.ccl.theta_Pt_sO, d.ccl.theta_Pt_bO)) && fail()
 
+    isnan(d.cgc.C_CO2) && fail()
     isnan(d.cgc.C_v) && fail()
     isnan(d.cgc.s) && fail()
     isnan(d.cgc.C_O2) && fail()
     isnan(d.cgc.C_N2) && fail()
+    isnan(d.cgc.C_H2) && fail()
     isnan(d.cgc.T) && fail()
     return nothing
 end
@@ -797,7 +859,28 @@ function _pack_cell_derivative_1D!(dy::AbstractVector{Float64}, offset::Int,
     for i in 1:nb_mpl; dy[idx] = d.cmpl[i].T; idx += 1; end
     for i in 1:nb_gdl; dy[idx] = d.cgdl[i].T; idx += 1; end
     dy[idx] = d.cgc.T; idx += 1
-    dy[idx] = d.ccl.eta_c
+    dy[idx] = d.ccl.eta_c; idx += 1
+    dy[idx] = d.agc.C_O2; idx += 1
+    for i in 1:nb_gdl; dy[idx] = d.agdl[i].C_O2; idx += 1; end
+    for i in 1:nb_mpl; dy[idx] = d.ampl[i].C_O2; idx += 1; end
+    dy[idx] = d.acl.C_O2; idx += 1
+    dy[idx] = d.ccl.C_H2; idx += 1
+    for i in 1:nb_mpl; dy[idx] = d.cmpl[i].C_H2; idx += 1; end
+    for i in 1:nb_gdl; dy[idx] = d.cgdl[i].C_H2; idx += 1; end
+    dy[idx] = d.cgc.C_H2; idx += 1
+    dy[idx] = d.acl.phi_a; idx += 1
+    dy[idx] = d.ccl.phi_c; idx += 1
+    for cl in (d.acl, d.ccl), field in (:theta_PtOH, :theta_Pt_sO, :theta_Pt_bO)
+        dy[idx] = getfield(cl, field); idx += 1
+    end
+    dy[idx] = d.agc.C_CO2; idx += 1
+    for i in 1:nb_gdl; dy[idx] = d.agdl[i].C_CO2; idx += 1; end
+    for i in 1:nb_mpl; dy[idx] = d.ampl[i].C_CO2; idx += 1; end
+    dy[idx] = d.acl.C_CO2; idx += 1
+    dy[idx] = d.ccl.C_CO2; idx += 1
+    for i in 1:nb_mpl; dy[idx] = d.cmpl[i].C_CO2; idx += 1; end
+    for i in 1:nb_gdl; dy[idx] = d.cgdl[i].C_CO2; idx += 1; end
+    dy[idx] = d.cgc.C_CO2; idx += 1
     return nothing
 end
 

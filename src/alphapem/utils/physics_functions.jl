@@ -107,6 +107,8 @@ function molar_mass(component::Symbol)
         return M_O2
     elseif component == :N2
         return M_N2
+    elseif component == :CO2
+        return M_CO2
     else
         throw(ArgumentError("The element should be either 'H2O_v', 'H2', 'O2' or 'N2'."))
     end
@@ -141,6 +143,8 @@ function mu_gaz(component::Symbol, T)
         mu = (-4.9433 + 8.0673e-1 * T_eff - 4.0416e-4 * T_eff^2 + 1.0111e-7 * T_eff^3) * 1e-7
     elseif component == :N2  # For T >= 63 K and T <= 1970 K.
         mu = (4.4656 + 6.3814e-1 * T_eff - 2.6596e-4 * T_eff^2 + 5.4113e-8 * T_eff^3) * 1e-7
+    elseif component == :CO2
+        mu = (11.811+0.49838*T_eff-1.0851e-4*T_eff^2)*1e-7
     else
         throw(ArgumentError("The element should be either 'H2O_v', 'H2', 'O2' or 'N2'."))
     end
@@ -190,4 +194,18 @@ function mu_mixture_gases(components::Vector, x::Vector, T)
     end
 
     return 1 / inv_mu_mix
+end
+
+"""Four-component form of the existing mixture-viscosity rule."""
+function mu_mixture_gases(c1::Symbol, x1::Real, c2::Symbol, x2::Real,
+                          c3::Symbol, x3::Real, c4::Symbol, x4::Real, T)
+    mass = (molar_mass(c1)*x1, molar_mass(c2)*x2, molar_mass(c3)*x3, molar_mass(c4)*x4)
+    return sum(mass) / (mass[1]/mu_gaz(c1,T) + mass[2]/mu_gaz(c2,T) +
+                        mass[3]/mu_gaz(c3,T) + mass[4]/mu_gaz(c4,T))
+end
+
+function mu_mixture_gases(c1::Symbol,x1::Real,c2::Symbol,x2::Real,c3::Symbol,x3::Real,c4::Symbol,x4::Real,c5::Symbol,x5::Real,T)
+    c=(c1,c2,c3,c4,c5); x=(x1,x2,x3,x4,x5)
+    mass=ntuple(i->molar_mass(c[i])*x[i],5)
+    return sum(mass)/sum(mass[i]/mu_gaz(c[i],T) for i in 1:5)
 end

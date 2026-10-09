@@ -26,7 +26,8 @@ module SimulationConfigModule
 
 using ..Config: AbstractCurrentParams, StepParams, PolarizationParams,
                  PolarizationCalibrationParams, EISParams, NumericalParams,
-                 PhysicalParams, OperatingConditions
+                 PhysicalParams, OperatingConditions, ReactionParams,
+                 validate_gas_feed, validate_reaction_parameters
 using ..StateScalingModule: StateScaling
 
 export SimulationConfig, validate_config
@@ -37,6 +38,11 @@ Base.@kwdef mutable struct SimulationConfig{T<:AbstractCurrentParams}
     type_current::T = PolarizationParams()
     numerical_parameters::NumericalParams = NumericalParams()
     voltage_zone::Symbol = :full
+    electrochemistry_model::Symbol = :legacy
+    enable_pt_oxide::Bool = false
+    enable_cor::Bool = false
+    pt_oxide_initialization::Symbol = :prescribed_coverages
+    initial_pt_coverages::NTuple{3,Float64} = (0.0, 0.0, 0.0)
     type_auxiliary::Symbol = :no_auxiliary
     type_flow::Symbol = :counter_flow
     type_purge::Symbol = :no_purge
@@ -46,6 +52,7 @@ Base.@kwdef mutable struct SimulationConfig{T<:AbstractCurrentParams}
     # Optional custom parameters to override defaults
     physical_parameters::Union{Nothing, PhysicalParams} = nothing
     operating_conditions::Union{Nothing, OperatingConditions} = nothing
+    reaction_parameters::ReactionParams = ReactionParams()
 end
 
 # --- Allowed values (tu peux enrichir plus tard) ---
@@ -60,6 +67,11 @@ const ALLOWED_CURRENT_TYPES = (
 const ALLOWED_VOLTAGE_ZONE = (
     :before_voltage_drop,
     :full
+)
+
+const ALLOWED_ELECTROCHEMISTRY_MODELS = (
+    :legacy,
+    :multireaction_potential,
 )
 
 const ALLOWED_AUXILIARY = (
@@ -94,11 +106,33 @@ const ALLOWED_DISPLAY_TIMING = (
 
 function validate_config(cfg::SimulationConfig)
 
+    validate_reaction_parameters(cfg.reaction_parameters)
+    cfg.enable_pt_oxide && cfg.electrochemistry_model != :multireaction_potential &&
+        throw(ArgumentError("Pt oxidation requires multireaction_potential"))
+    cfg.enable_cor && !cfg.enable_pt_oxide &&
+        throw(ArgumentError("Carbon oxidation requires Pt oxidation for the PtOH-catalyzed path"))
+    cfg.enable_cor && cfg.type_auxiliary != :no_auxiliary &&
+        throw(ArgumentError("COR/CO₂ transport currently requires type_auxiliary=:no_auxiliary"))
+    cfg.pt_oxide_initialization in (:prescribed_coverages, :stationary_local) ||
+        throw(ArgumentError("Unknown Pt-oxide initialization mode"))
+    oh, so, bo = cfg.initial_pt_coverages
+    max_layers = max(cfg.reaction_parameters.Pt_particle_diameter /
+                     (4cfg.reaction_parameters.Pt_atomic_radius), 1.0)
+    all(isfinite, (oh, so, bo)) && oh >= 0 && so >= 0 && oh + so <= 1 && 0 <= bo <= max_layers ||
+        throw(ArgumentError("Invalid initial Pt/PtOH/PtO or bulk-oxide coverage"))
+    if cfg.operating_conditions !== nothing
+        validate_gas_feed(cfg.operating_conditions, cfg.type_auxiliary,
+                          cfg.electrochemistry_model)
+    end
+
     any(T -> cfg.type_current isa T, ALLOWED_CURRENT_TYPES) ||
         error("Invalid type_current: $(typeof(cfg.type_current))")
 
     cfg.voltage_zone in ALLOWED_VOLTAGE_ZONE ||
         error("Invalid voltage_zone: $(cfg.voltage_zone)")
+
+    cfg.electrochemistry_model in ALLOWED_ELECTROCHEMISTRY_MODELS ||
+        error("Invalid electrochemistry_model: $(cfg.electrochemistry_model)")
 
     cfg.type_auxiliary in ALLOWED_AUXILIARY ||
         error("Invalid type_auxiliary: $(cfg.type_auxiliary)")
@@ -133,9 +167,11 @@ function validate_config(cfg::SimulationConfig)
         ("state_scaling.cell.C_H2", cell_scaling.C_H2),
         ("state_scaling.cell.C_O2", cell_scaling.C_O2),
         ("state_scaling.cell.C_N2", cell_scaling.C_N2),
+        ("state_scaling.cell.C_CO2", cell_scaling.C_CO2),
         ("state_scaling.cell.T", cell_scaling.T),
         ("state_scaling.cell.lambda", cell_scaling.lambda),
         ("state_scaling.cell.eta_c", cell_scaling.eta_c),
+        ("state_scaling.cell.phi", cell_scaling.phi),
         ("state_scaling.cell.s", cell_scaling.s),
         ("state_scaling.manifold.P", manifold_scaling.P),
         ("state_scaling.manifold.Phi", manifold_scaling.Phi),

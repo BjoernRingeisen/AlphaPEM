@@ -1,6 +1,19 @@
 results
 external
 docs/build
+# Local migration documentation and simulation/validation outputs
+/docs/python-to-julia-migration.md
+/docs/src/advanced/multireaction.md
+/docs/validation/
+# Local port tests, validation runners, fixtures and evaluation scripts
+/test/run_*.jl
+/test/probe_*.jl
+/test/test_*.jl
+/test/*_helpers.jl
+/test/*.py
+/test/fixtures/
+/examples/run_air_air_start.jl
+/examples/run_warm_air_air_start.jl
 .CondaPkg
 __pycache__
 __pycache__/

@@ -2,6 +2,14 @@
 
 The main PEMFC simulator with domain types and computational modules.
 
+## Local Electrochemistry
+
+```@autodocs
+Modules = [AlphaPEM.Core.Electrochemistry]
+Private = false
+Order = [:type, :function]
+```
+
 ## Types and Data Structures
 
 ```@autodocs

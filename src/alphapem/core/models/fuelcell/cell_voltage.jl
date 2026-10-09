@@ -68,3 +68,37 @@ function calculate_cell_voltage(i_fc::Real, C_O2_Pt::Real, sv::CellState1D, fc::
 
     return Ucell
 end
+
+"""Cell voltage obtained from the two local electrode-potential states.
+
+The potential difference supplies the electrochemical voltage. The external
+terminal voltage additionally includes the same membrane, CCL protonic and
+electronic losses used by the legacy closure.
+"""
+function calculate_cell_voltage_from_potentials(i_fc::Real, sv::CellState1D,
+                                                fc::AbstractFuelCell)
+    pp = fc.physical_parameters
+    T_acl = _positive_temperature_value(sv.acl.T)
+    T_mem = _positive_temperature_value(sv.mem.T)
+    T_ccl = _positive_temperature_value(sv.ccl.T)
+    lambda_mem, lambda_ccl = sv.mem.lambda, sv.ccl.lambda
+    C_H2_acl = _nonnegative_value(sv.acl.C_H2)
+    C_H2_ccl = _nonnegative_value(sv.ccl.C_H2)
+    C_O2_acl = _nonnegative_value(sv.acl.C_O2)
+    C_O2_ccl = _nonnegative_value(sv.ccl.C_O2)
+
+    T_mean = average([T_acl, T_mem, T_ccl],
+                     [pp.Hacl, pp.Hmem, pp.Hccl] ./ (pp.Hacl + pp.Hmem + pp.Hccl))
+    # Match the signed membrane-gradient crossover used by the multireaction
+    # species balances. Equal inventories on both sides (air/air startup) have
+    # zero crossover current instead of the legacy one-way cathode-O2 loss.
+    i_H2 = 2F * R * T_mean / pp.Hmem * (C_H2_acl - C_H2_ccl) *
+           k_H2(lambda_mem, T_mem, pp.kappa_co, pp)
+    i_O2 = 4F * R * T_mean / pp.Hmem * (C_O2_ccl - C_O2_acl) *
+           k_O2(lambda_mem, T_mem, pp.kappa_co, pp)
+    i_n = i_H2 + i_O2
+
+    Rmem = pp.Hmem / sigma_p_eff(:mem, lambda_mem, T_mem, nothing, pp)
+    Rccl = pp.Hccl / (3 * sigma_p_eff(:ccl, lambda_ccl, T_ccl, pp.Hccl, pp))
+    return sv.ccl.phi_c - sv.acl.phi_a - (i_fc + i_n) * (Rmem + Rccl + pp.Re)
+end

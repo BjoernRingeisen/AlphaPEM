@@ -73,6 +73,10 @@ function calculate_flows_1D_GC_manifold!(flows_work::GCManifoldFlowsWorkspace,
     C_H2_agc, C_N2_agc = [sv_1D_cell[i].agc.C_H2 for i in 1:nb_gc], [sv_1D_cell[i].agc.C_N2 for i in 1:nb_gc]
     C_O2_cgc, C_N2_cgc = [sv_1D_cell[i].cgc.C_O2 for i in 1:nb_gc], [sv_1D_cell[i].cgc.C_N2 for i in 1:nb_gc]
 
+    C_O2_agc = [sv_1D_cell[i].agc.C_O2 for i in 1:nb_gc]
+
+    C_H2_cgc = [sv_1D_cell[i].cgc.C_H2 for i in 1:nb_gc]
+
     # Intermediate values
     (P_agc, P_cgc, Phi_agc, Phi_cgc, y_H2_agc, y_O2_cgc, M_agc, M_cgc, M_ext, M_H2_N2_in, rho_agc, rho_cgc, k_purge,
      Abp_a, Abp_c, mu_gaz_agc, mu_gaz_cgc) = calculate_flow_1D_GC_manifold_int_values!(flows_int_work, sv_1D_cell, sv_auxiliary, fc, cfg)
@@ -235,20 +239,44 @@ function calculate_flows_1D_GC_manifold!(flows_work::GCManifoldFlowsWorkspace,
         # J_N2_cgc_in = (1 - y_O2_csm_out_to_cgc) * (1 - Phi_csm_out_to_cgc * Psat(T_des) / Pcsm_out_to_cgc) * Jc_in
         # J_N2_cgc_out = (1 - y_O2_cgc_to_cem_in) * (1 - Phi_cgc_to_cem_in * Psat(T_des) / Pcgc_to_cem_in) * Jc_out
     else  # type_auxiliary == :no_auxiliary
-        J_N2_agc_in = (1 - y_H2_in) * (1 - Phi_a_des * Psat(T_des) / Pa_in) * Ja_in
+        J_N2_agc_in = (1 - y_H2_in - oc.y_O2_anode_in - oc.y_CO2_anode_in) * (1 - Phi_a_des * Psat(T_des) / Pa_in) * Ja_in
         J_N2_agc_agc = flows_work.J_N2_agc_agc
         @inbounds for k in 1:nb_gc
             J_N2_agc_agc[k] = C_N2_agc[k] * v_a[k]
         end
         J_N2_agc_out = J_N2_agc_agc[i_end]
 
-        J_N2_cgc_in = (1 - y_O2_ext) * (1 - Phi_c_des * Psat(T_des) / Pc_in) * Jc_in
+        J_O2_agc_in = oc.y_O2_anode_in * (1 - Phi_a_des * Psat(T_des) / Pa_in) * Ja_in
+        J_O2_agc_agc = flows_work.J_O2_agc_agc
+        @inbounds for k in 1:nb_gc
+            J_O2_agc_agc[k] = C_O2_agc[k] * v_a[k]
+        end
+        J_O2_agc_out = J_O2_agc_agc[i_end]
+
+        J_N2_cgc_in = (1 - y_O2_ext - oc.y_H2_cathode_in - oc.y_CO2_cathode_in) * (1 - Phi_c_des * Psat(T_des) / Pc_in) * Jc_in
         J_N2_cgc_cgc = flows_work.J_N2_cgc_cgc
         @inbounds for k in 1:nb_gc
             J_N2_cgc_cgc[k] = C_N2_cgc[k] * v_c[k]
         end
         J_N2_cgc_out = J_N2_cgc_cgc[end]
+
+        J_H2_cgc_in = oc.y_H2_cathode_in * (1 - Phi_c_des * Psat(T_des) / Pc_in) * Jc_in
+        J_H2_cgc_cgc = flows_work.J_H2_cgc_cgc
+        @inbounds for k in 1:nb_gc
+            J_H2_cgc_cgc[k] = C_H2_cgc[k] * v_c[k]
+        end
+        J_H2_cgc_out = J_H2_cgc_cgc[end]
     end
+
+    J_CO2_agc_agc = flows_work.J_CO2_agc_agc
+    J_CO2_cgc_cgc = flows_work.J_CO2_cgc_cgc
+    for k in 1:nb_gc
+        J_CO2_agc_agc[k] = sv_1D_cell[k].agc.C_CO2 * v_a[k]
+        J_CO2_cgc_cgc[k] = sv_1D_cell[k].cgc.C_CO2 * v_c[k]
+    end
+    J_CO2_agc_in = oc.y_CO2_anode_in*(1-Phi_a_des*Psat(T_des)/Pa_in)*Ja_in
+    J_CO2_cgc_in = oc.y_CO2_cathode_in*(1-Phi_c_des*Psat(T_des)/Pc_in)*Jc_in
+    J_CO2 = GCCarbonDioxideFlows{nb_gc}(J_CO2_agc_in,J_CO2_agc_agc,J_CO2_agc_agc[i_end],J_CO2_cgc_in,J_CO2_cgc_cgc,J_CO2_cgc_cgc[end])
 
     # Vapor flows at the manifold (mol.s-1)
     if type_auxiliary == :forced_convective_cathode_with_anodic_recirculation ||
@@ -285,12 +313,14 @@ function calculate_flows_1D_GC_manifold!(flows_work::GCManifoldFlowsWorkspace,
         Jv = GCVaporFlows{nb_gc}(Jv_agc_in, Jv_agc_agc, Jv_agc_out,
                                  Jv_cgc_in, Jv_cgc_cgc, Jv_cgc_out)
         Jl = GCLiquidFlows{nb_gc}(Jl_agc_agc, Jl_agc_out, Jl_cgc_cgc, Jl_cgc_out)
-        J_H2 = GCHydrogenFlows{nb_gc}(J_H2_agc_in, J_H2_agc_agc, J_H2_agc_out)
-        J_O2 = GCOxygenFlows{nb_gc}(J_O2_cgc_in, J_O2_cgc_cgc, J_O2_cgc_out)
+        J_H2 = GCHydrogenFlows{nb_gc}(J_H2_agc_in, J_H2_agc_agc, J_H2_agc_out,
+                                      J_H2_cgc_in, J_H2_cgc_cgc, J_H2_cgc_out)
+        J_O2 = GCOxygenFlows{nb_gc}(J_O2_agc_in, J_O2_agc_agc, J_O2_agc_out,
+                                      J_O2_cgc_in, J_O2_cgc_cgc, J_O2_cgc_out)
         J_N2 = GCNitrogenFlows{nb_gc}(J_N2_agc_in, J_N2_agc_agc, J_N2_agc_out,
                                       J_N2_cgc_in, J_N2_cgc_cgc, J_N2_cgc_out)
         W = GCMassFlows(Wa_in, Wa_out, Wc_in, Wc_out)
-        return GCManifoldFlows1D{nb_gc}(Jv, Jl, J_H2, J_O2, J_N2, W)
+        return GCManifoldFlows1D{nb_gc}(Jv, Jl, J_H2, J_O2, J_N2, W, J_CO2)
     else
         # TODO: Implement full return statement for auxiliary cases. Ensure N2 anode inlet is 0 for
         # :forced_convective_cathode_with_anodic_recirculation and respects y_H2_in for others.

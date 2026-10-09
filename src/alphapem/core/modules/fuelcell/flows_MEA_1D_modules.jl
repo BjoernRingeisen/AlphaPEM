@@ -65,9 +65,13 @@ function calculate_flows_1D_MEA_int_values!(flows_int_work::MEAFlowsIntWorkspace
     C_O2_cgdl, C_O2_cgc = getproperty.(sv.cgdl, :C_O2), sv.cgc.C_O2
 
     C_N2_agc, C_N2_agdl = sv.agc.C_N2, getproperty.(sv.agdl, :C_N2)
+    C_O2_agc, C_O2_agdl = sv.agc.C_O2, getproperty.(sv.agdl, :C_O2)
     C_N2_ampl, C_N2_acl = getproperty.(sv.ampl, :C_N2), sv.acl.C_N2
+    C_O2_ampl, C_O2_acl = getproperty.(sv.ampl, :C_O2), sv.acl.C_O2
     C_N2_ccl, C_N2_cmpl = sv.ccl.C_N2, getproperty.(sv.cmpl, :C_N2)
+    C_H2_ccl, C_H2_cmpl = sv.ccl.C_H2, getproperty.(sv.cmpl, :C_H2)
     C_N2_cgdl, C_N2_cgc = getproperty.(sv.cgdl, :C_N2), sv.cgc.C_N2
+    C_H2_cgdl, C_H2_cgc = getproperty.(sv.cgdl, :C_H2), sv.cgc.C_H2
 
     lambda_acl, lambda_mem, lambda_ccl = sv.acl.lambda, sv.mem.lambda, sv.ccl.lambda
 
@@ -76,22 +80,22 @@ function calculate_flows_1D_MEA_int_values!(flows_int_work::MEAFlowsIntWorkspace
     H_mpl_node = Hmpl / nb_mpl
 
     # Pressures in the stack
-    Pagc  = (C_v_agc + C_H2_agc + C_N2_agc) * R * T_agc
-    Pagdl = [(C_v_agdl[i] + C_H2_agdl[i] + C_N2_agdl[i]) * R * T_agdl[i] for i in 1:nb_gdl]
-    Pampl = [(C_v_ampl[i] + C_H2_ampl[i] + C_N2_ampl[i]) * R * T_ampl[i] for i in 1:nb_mpl]
-    Pacl  = (C_v_acl + C_H2_acl + C_N2_acl) * R * T_acl
-    Pccl  = (C_v_ccl + C_O2_ccl + C_N2_ccl) * R * T_ccl
-    Pcmpl = [(C_v_cmpl[i] + C_O2_cmpl[i] + C_N2_cmpl[i]) * R * T_cmpl[i] for i in 1:nb_mpl]
-    Pcgdl = [(C_v_cgdl[i] + C_O2_cgdl[i] + C_N2_cgdl[i]) * R * T_cgdl[i] for i in 1:nb_gdl]
-    Pcgc  = (C_v_cgc + C_O2_cgc + C_N2_cgc) * R * T_cgc
+    Pagc  = (C_v_agc + C_H2_agc + C_N2_agc + C_O2_agc + sv.agc.C_CO2) * R * T_agc
+    Pagdl = [(C_v_agdl[i] + C_H2_agdl[i] + C_N2_agdl[i] + C_O2_agdl[i] + sv.agdl[i].C_CO2) * R * T_agdl[i] for i in 1:nb_gdl]
+    Pampl = [(C_v_ampl[i] + C_H2_ampl[i] + C_N2_ampl[i] + C_O2_ampl[i] + sv.ampl[i].C_CO2) * R * T_ampl[i] for i in 1:nb_mpl]
+    Pacl  = (C_v_acl + C_H2_acl + C_N2_acl + C_O2_acl + sv.acl.C_CO2) * R * T_acl
+    Pccl  = (C_v_ccl + C_O2_ccl + C_N2_ccl + C_H2_ccl + sv.ccl.C_CO2) * R * T_ccl
+    Pcmpl = [(C_v_cmpl[i] + C_O2_cmpl[i] + C_N2_cmpl[i] + C_H2_cmpl[i] + sv.cmpl[i].C_CO2) * R * T_cmpl[i] for i in 1:nb_mpl]
+    Pcgdl = [(C_v_cgdl[i] + C_O2_cgdl[i] + C_N2_cgdl[i] + C_H2_cgdl[i] + sv.cgdl[i].C_CO2) * R * T_cgdl[i] for i in 1:nb_gdl]
+    Pcgc  = (C_v_cgc + C_O2_cgc + C_N2_cgc + C_H2_cgc + sv.cgc.C_CO2) * R * T_cgc
 
     # Capillary pressures in the stack
     Pcap_agdl = Pcap(:gdl, s_agdl[1],      T_agdl[1],      epsilon_gdl, epsilon_c, pp)
     Pcap_cgdl = Pcap(:gdl, s_cgdl[nb_gdl], T_cgdl[nb_gdl], epsilon_gdl, epsilon_c, pp)
 
     # Densities in the GC
-    rho_agc = C_H2_agc * M_H2 + C_v_agc * M_H2O + C_N2_agc * M_N2
-    rho_cgc = C_O2_cgc * M_O2 + C_v_cgc * M_H2O + C_N2_cgc * M_N2
+    rho_agc = C_H2_agc * M_H2 + C_v_agc * M_H2O + C_N2_agc * M_N2 + C_O2_agc * M_O2 + sv.agc.C_CO2*M_CO2
+    rho_cgc = C_O2_cgc * M_O2 + C_v_cgc * M_H2O + C_N2_cgc * M_N2 + C_H2_cgc * M_H2 + sv.cgc.C_CO2*M_CO2
 
     # Weighted mean values ...
     #       ... of the EOD flow of water in the membrane
@@ -790,7 +794,9 @@ function Svl(element::Symbol,
     # Extraction of the parameters
     gamma_cond, gamma_evap = pp.gamma_cond, pp.gamma_evap
 
-    s_eff = _clamped_fraction_value(s)
+    # Unlike coefficients containing singular powers, phase-transfer inventory
+    # factors must reach exact zero at empty/full pores.
+    s_eff = clamp(Float64(s), 0.0, 1.0)
     C_v_eff = _nonnegative_value(C_v)
     T_eff = _positive_temperature_value(T)
     # Calculation of the total and partial pressures
@@ -812,7 +818,13 @@ function Svl(element::Symbol,
     K_transition = 3e-3 # This is a constant that defines the sharpness of the transition between two states.
     w = 0.5 * (1 + tanh(K_transition * (Psat_eff - P_v))) # Transition function.
 
-    return w * Svl_evap + (1 - w) * Svl_cond # Interpolation between condensation and evaporation.
+    # The smooth switch has finite tails: below saturation its condensation
+    # branch is negative even at s=0, and above saturation its evaporation
+    # branch is positive even at s=1. Allow only the physical sign of each
+    # process, so no liquid is removed from a dry pore or added to a full pore.
+    # The same signed transfer is used by liquid, vapour and latent heat.
+    return w * min(Svl_evap, zero(Svl_evap)) +
+           (1 - w) * max(Svl_cond, zero(Svl_cond))
 end
 
 

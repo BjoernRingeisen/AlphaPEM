@@ -52,8 +52,17 @@ Base.@kwdef struct CellStateScaling
     T::Float64 = 350.0
     lambda::Float64 = 10.0
     eta_c::Float64 = 0.3
+    phi::Float64 = 1.0
+    C_CO2::Float64 = 10.0
     s::Float64 = 0.1
 end
+
+# Preserve the positional constructor exported before electrode potentials were
+# added to the spatial state. The potential reference uses its default value.
+CellStateScaling(C_v::Real, C_H2::Real, C_O2::Real, C_N2::Real, T::Real,
+                 lambda::Real, eta_c::Real, s::Real) =
+    CellStateScaling(Float64(C_v), Float64(C_H2), Float64(C_O2), Float64(C_N2),
+                     Float64(T), Float64(lambda), Float64(eta_c), 1.0, 10.0, Float64(s))
 
 """
 Scaling references for manifold states.
@@ -117,5 +126,7 @@ Base.@kwdef struct StateScaling
     dae_algebraic::DAEAlgebraicScaling = DAEAlgebraicScaling()
 end
 
-end # module
+CellStateScaling(cv,h2,o2,n2,T,lambda,eta,phi,s) =
+    CellStateScaling(cv,h2,o2,n2,T,lambda,eta,phi,10.0,s)
 
+end # module

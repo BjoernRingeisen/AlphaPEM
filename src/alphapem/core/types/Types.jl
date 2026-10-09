@@ -12,6 +12,7 @@ Structs are grouped by physical role:
   - cell_balance      : local conservation-law terms (fluxes + sources)
   - auxiliary         : balance-of-plant 0-D auxiliary systems
   - cell_flows        : inter-layer fluxes and source terms (ODE RHS outputs)
+  - electrochemistry_types: local reaction inputs and evaluated reaction results
 """
 module Types
 
@@ -24,11 +25,15 @@ include("fuelcell/cell_balance.jl")
 include("fuelcell/auxiliary.jl")
 include("fuelcell/cell_flows.jl")
 include("fuelcell/simulation_outputs.jl")
+include("fuelcell/electrochemistry_types.jl")
 
 # Electrolyzer specific types (to be added)
 # include("electrolyzer/...")
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
+export ElectrodeState, ReactionResult, ElectrodeReactions, MultireactionResult, PtCoverage, PtOxideResult
+export CarbonOxidationResult, MEACarbonDioxideFluxes, GCCarbonDioxideFlows
 
 # --- cell_state.jl ---
 export AbstractCellState

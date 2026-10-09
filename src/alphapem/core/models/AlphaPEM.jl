@@ -82,6 +82,10 @@ initial_derivative_values : Union{Nothing, Vector{Float64}}, optional
 time_interval : Union{Nothing, Tuple{Float64, Float64}}, optional
     Time interval for numerical resolution. If `nothing`, it is generated
     according to the chosen current profile.
+save_times : Union{Nothing, AbstractVector{<:Real}}, keyword
+    Optional physical-time output grid. IDA stops at these instants so saved
+    constrained states are accepted steps. The default uses the existing
+    rate-limited saving and current-profile sampling.
 
 Returns
 -------
@@ -91,14 +95,21 @@ Nothing
 function simulate_model!(simu::AlphaPEM,
                          initial_variable_values::Union{Nothing, Vector{Float64}}=nothing,
                          initial_derivative_values::Union{Nothing, Vector{Float64}}=nothing,
-                         time_interval::Union{Nothing, Tuple{Float64, Float64}}=nothing)
+                         time_interval::Union{Nothing, Tuple{Float64, Float64}}=nothing;
+                         save_times::Union{Nothing,AbstractVector{<:Real}}=nothing)
 
     # ── 1. Precondition checks ─────────────────────────────────────────────────
+    validate_config(simu.cfg)
+    validate_gas_feed(simu.fuel_cell.operating_conditions, simu.cfg.type_auxiliary,
+                      simu.cfg.electrochemistry_model)
     _check_simulation_preconditions!(simu)
     simu.outputs = nothing
 
     # ── 2. Time interval and initial physical state ────────────────────────────
     simu.time_interval = time_interval === nothing ? simu.current_density.time_interval : time_interval
+    requested_times=save_times===nothing ? Float64[] : sort!(unique!(Float64.(save_times)))
+    all(t->isfinite(t) && simu.time_interval[1]<=t<=simu.time_interval[2],requested_times) ||
+        throw(ArgumentError("save_times must be finite and inside the simulation interval"))
     has_solver_restart_state = initial_variable_values !== nothing &&
                                initial_derivative_values !== nothing
     simu.initial_variable_values = initial_variable_values === nothing ?
@@ -114,15 +125,50 @@ function simulate_model!(simu::AlphaPEM,
 
     # ── 4. State scaling ───────────────────────────────────────────────────────
     np = simu.cfg.numerical_parameters
+    if simu.cfg.enable_pt_oxide && simu.cfg.type_auxiliary == :no_auxiliary
+        # NoInit requires exact algebraic inlet flows, including pressure drop.
+        # Preserve caller-owned restart vectors and every differential state.
+        simu.initial_variable_values = copy(simu.initial_variable_values)
+        _reconcile_pt_oxide_inlet_flows!(simu, dims)
+    end
     solver_state_scaling           = build_solver_state_scaling(simu.cfg; include_algebraic=true)
     initial_scaled_variable_values = scale_values(simu.initial_variable_values, solver_state_scaling)
     atol_scaled                    = np.atol ./ solver_state_scaling
+    # Validate restart coverages before any kinetic evaluation or IDA setup.
+    pt_indices = NTuple{3,Int}[]
+    if simu.cfg.enable_pt_oxide
+        names = canonical_cell_solver_variable_names_1D(np.nb_gdl, np.nb_mpl)
+        for k in 1:np.nb_gc, side in ("acl", "ccl")
+            indices = ntuple(j -> (k-1)*length(names) + findfirst(==(
+                ("theta_PtOH_", "theta_Pt_sO_", "theta_Pt_bO_")[j]*side), names), 3)
+            push!(pt_indices, indices)
+            # Near-zero oxide inventories need an absolute error below the
+            # physical-domain guard, even with coarse gas/thermal tolerances.
+            for index in indices
+                atol_scaled[index] = min(atol_scaled[index], 1e-8)
+            end
+            cov = PtCoverage((simu.initial_variable_values[i] for i in indices)...)
+            valid_pt_coverage(cov, simu.cfg.reaction_parameters; atol=1e-6) ||
+                throw(ArgumentError("Invalid Pt coverage in initial/restart state at $side node $k"))
+        end
+    end
 
     # ── 5. Safety-stop flag (shared between callback and residual) ────────────
     # Created here so that both the residual closure and the DiscreteCallback
     # reference the same Ref{Bool}.  When the callback sets it to `true`,
     # the residual returns zeros immediately, preventing NaN propagation
     # during the micro-steps IDA takes after `terminate!` is issued.
+    co2_indices = Int[]
+    if simu.cfg.enable_cor || any(>(0), (simu.fuel_cell.operating_conditions.y_CO2_anode_in,
+                                       simu.fuel_cell.operating_conditions.y_CO2_cathode_in))
+        names = canonical_cell_solver_variable_names_1D(np.nb_gdl,np.nb_mpl)
+        for k in 1:np.nb_gc, j in eachindex(names)
+            startswith(names[j],"C_CO2_") || continue
+            index = (k-1)*length(names)+j
+            push!(co2_indices,index)
+            atol_scaled[index] = min(atol_scaled[index],1e-8/solver_state_scaling[index])
+        end
+    end
     safety_triggered = Ref(false)
 
     # ── 6. DAE residual function ───────────────────────────────────────────────
@@ -139,18 +185,59 @@ function simulate_model!(simu::AlphaPEM,
                                          dims.differential_vars) : initial_derivative_values
 
     # ── 8. Sparse Jacobian ─────────────────────────────────────────────────────
+    trace_indices=Int[]
+    pt_oxygen_indices=Int[]
+    reactant_indices=Int[]
+    n_diff=np.nb_gc*dims.n_vars_cell_1D+dims.n_vars_manifold+dims.n_vars_auxiliary
+    if simu.cfg.electrochemistry_model==:multireaction_potential
+        names=canonical_cell_solver_variable_names_1D(np.nb_gdl,np.nb_mpl)
+        for k in 1:np.nb_gc, name in ("C_O2_acl","C_H2_ccl")
+            index=(k-1)*length(names)+findfirst(==(name),names)
+            push!(trace_indices,index)
+            # Trace oxygen may be below the ordinary physical gas tolerance.
+            atol_scaled[index]=min(atol_scaled[index],1e-10/solver_state_scaling[index])
+        end
+        for k in 1:np.nb_gc,(j,name) in enumerate(names)
+            (startswith(name,"C_O2_") || startswith(name,"C_H2_")) || continue
+            push!(reactant_indices,(k-1)*length(names)+j)
+        end
+        # The algebraic Pt oxygen variable also controls multireaction kinetics.
+        # A reference-scale difference can cross the transport target's lower
+        # clamp and badly underestimate the constraint derivative at startup.
+        for k in 1:np.nb_gc
+            index=n_diff+1+np.nb_gc+k
+            push!(pt_oxygen_indices,index)
+            atol_scaled[index]=min(atol_scaled[index],1e-10/solver_state_scaling[index])
+        end
+    end
+    # Phase-transfer inventory factors vanish at s=0. A centered perturbation
+    # across that clipped boundary halves the evaporation derivative, just as
+    # for a depleted oxide inventory. Use the physical right-hand stencil.
+    water_names=canonical_cell_solver_variable_names_1D(np.nb_gdl,np.nb_mpl)
+    water_indices=[(k-1)*length(water_names)+j for k in 1:np.nb_gc
+                   for j in eachindex(water_names) if startswith(water_names[j],"s_")]
     jacobian!, jac_prototype = _build_jacobian_closure(residual!, packed, simu, dims,
-                                                        initial_scaled_variable_values)
+                                                        initial_scaled_variable_values;
+                                                        nonnegative_indices=vcat(collect(Iterators.flatten(pt_indices)),trace_indices,water_indices,pt_oxygen_indices),
+                                                        local_step_indices=vcat(trace_indices,pt_oxygen_indices))
 
     # ── 9. Callbacks ───────────────────────────────────────────────────────────
-    n_diff    = np.nb_gc * dims.n_vars_cell_1D + dims.n_vars_manifold + dims.n_vars_auxiliary
-    safety_cb = _build_physical_safety_callback(n_diff, np.nb_gc, solver_state_scaling, safety_triggered)
+    # A zero-current multireaction conditioning segment can legitimately pass
+    # through zero voltage while the anode feed changes from air to hydrogen.
+    # Keep the overload guard active for every segment that requests load.
+    zero_current_conditioning = _is_zero_current_conditioning(simu.cfg)
+    safety_cb = _build_physical_safety_callback(n_diff, np.nb_gc, solver_state_scaling,
+                                                 safety_triggered;
+                                                 allow_nonpositive_voltage=zero_current_conditioning,
+                                                 pt_indices=pt_indices,
+                                                 pt_max_layers=pt_bulk_capacity(simu.cfg.reaction_parameters))
     dtmax_cb  = _build_dtmax_callback(simu)
     timeout_cb = _build_timeout_callback(np.max_run_time_s)
     endpoint_du_cb = _build_endpoint_du_callback(simu)
     saving_cb = _build_rate_limited_saving_callback(np.save_freq, simu.time_interval[1])
 
-    callbacks = CallbackSet(safety_cb, endpoint_du_cb, saving_cb,
+    callbacks = CallbackSet(safety_cb, endpoint_du_cb,
+                            (isempty(requested_times) ? (saving_cb,) : ())...,
                             (dtmax_cb  === nothing ? () : (dtmax_cb,))...,
                             (timeout_cb === nothing ? () : (timeout_cb,))...)
 
@@ -162,7 +249,12 @@ function simulate_model!(simu::AlphaPEM,
     init_alg = NoInit()
     tstops     = solver_tstops(simu.current_density, simu.time_interval)
     saveat_arg = saveat_times(simu.current_density, simu.time_interval, np.save_freq)
-    simu.sol = solve(prob, IDA(linear_solver=:KLU);
+    if !isempty(requested_times)
+        saveat_arg=sort!(unique!(vcat(saveat_arg,requested_times)))
+        tstops=sort!(unique!(vcat(tstops,requested_times)))
+    end
+    simu.sol = _solve_with_pt_constraints(prob, IDA(linear_solver=:KLU), pt_indices;
+                     additional_nonnegative_indices=vcat(co2_indices,reactant_indices),
                      reltol         = np.rtol,
                      abstol         = atol_scaled,
                      tstops         = tstops,
@@ -186,6 +278,59 @@ function simulate_model!(simu::AlphaPEM,
     return nothing
 end
 
+
+"""Reject IDA steps with negative oxide or enabled gas inventories without projection."""
+function _solve_with_pt_constraints(prob, alg, pt_indices; additional_nonnegative_indices=Int[], kwargs...)
+    isempty(pt_indices) && isempty(additional_nonnegative_indices) && return solve(prob, alg; kwargs...)
+    constraint_values = zeros(length(prob.u0))
+    for indices in pt_indices, index in indices
+        prob.u0[index] >= 0 || throw(ArgumentError(
+            "IDA Pt constraints require nonnegative initial coverage at index $index"))
+        constraint_values[index] = 1.0 # IDA's non-strict y >= 0 constraint.
+    end
+    for index in additional_nonnegative_indices
+        prob.u0[index] >= 0 || throw(ArgumentError("Negative initial gas inventory at index $index"))
+        constraint_values[index] = 1.0
+    end
+    integrator = init(prob, alg; kwargs...)
+    # Sundials 6 requires the integrator's SUNContext; older wrappers do not.
+    constraint_vector = hasproperty(integrator.u_nvec, :ctx) ?
+        NVector(constraint_values, integrator.u_nvec.ctx) : NVector(constraint_values)
+    flag = IDASetConstraints(integrator.mem, constraint_vector)
+    flag == 0 || error("IDA could not install Pt nonnegativity constraints (flag=$flag)")
+    return GC.@preserve constraint_vector constraint_values begin
+        solve!(integrator)
+    end
+end
+
+function _is_zero_current_conditioning(cfg::SimulationConfig)
+    # Endpoint samples cannot establish zero load for an EIS or other waveform.
+    return cfg.electrochemistry_model == :multireaction_potential &&
+           cfg.type_current isa StepParams &&
+           iszero(cfg.type_current.i_ini) && iszero(cfg.type_current.i_step)
+end
+
+"""Resolve the two pressure-dependent inlet constraints before oxide integration."""
+function _reconcile_pt_oxide_inlet_flows!(simu::AlphaPEM, dims)
+    cfg = simu.cfg
+    np = cfg.numerical_parameters
+    y = simu.initial_variable_values
+    states = [_unpack_cell_state_1D(@view(y[(k-1)*dims.n_vars_cell_1D+1:k*dims.n_vars_cell_1D]),
+                                   np.nb_gdl,np.nb_mpl) for k in 1:np.nb_gc]
+    work = GCManifoldWorkspace(np.nb_gc)
+    res = zeros(2)
+    ja, jc = y[end-1], y[end]
+    i = current(simu.current_density, simu.time_interval[1])
+    for _ in 1:50
+        velocity_inlet_flow_residuals!(work,res,ja,jc,states,i,simu.fuel_cell,cfg)
+        maximum(abs,res) < 1e-10 && break
+        ja += res[1]
+        jc += res[2]
+    end
+    maximum(abs,res) < 1e-8 || error("Pt-oxide startup inlet-flow initialization did not converge")
+    y[end-1], y[end] = ja, jc
+    return nothing
+end
 
 """Emit configuration warnings and throw on invalid inputs."""
 function _check_simulation_preconditions!(simu::AlphaPEM)
@@ -233,6 +378,7 @@ enough for full relaxation, with no liquid water (s = 0) and no load current.
 function create_initial_variable_values(simu::AlphaPEM)::Vector{Float64}
     # Extraction of the parameter classes for better readability.
     oc = simu.fuel_cell.operating_conditions
+    validate_gas_feed(oc, simu.cfg.type_auxiliary, simu.cfg.electrochemistry_model)
     pp = simu.fuel_cell.physical_parameters
     np = simu.cfg.numerical_parameters
     # Extraction of frequently used parameters
@@ -260,12 +406,14 @@ function create_initial_variable_values(simu::AlphaPEM)::Vector{Float64}
     C_v_c_ini = Phi_c_ini * Psat_ini / (R * T_ini)
     C_H2_ini = y_H2_in * (Pa_ini - Phi_a_ini * Psat_ini) / (R * T_ini)
     C_O2_ini = y_O2_ext * (Pc_ini - Phi_c_ini * Psat_ini) / (R * T_ini)
+    C_O2_a_ini = oc.y_O2_anode_in * (Pa_ini - Phi_a_ini * Psat_ini) / (R * T_ini)
+    C_H2_c_ini = oc.y_H2_cathode_in * (Pc_ini - Phi_c_ini * Psat_ini) / (R * T_ini)
     if simu.cfg.type_auxiliary == :forced_convective_cathode_with_anodic_recirculation
         C_N2_agc_ini = 0.0 # natural behavior, no N2 at anode inlet (pure H2).
     else
-        C_N2_agc_ini = (1 - y_H2_in) * (Pa_ini - Phi_a_ini * Psat_ini) / (R * T_ini) # artificial behavior to mimic N2 accumulation due to anodic recirculation.
+        C_N2_agc_ini = (1 - y_H2_in - oc.y_O2_anode_in - oc.y_CO2_anode_in) * (Pa_ini - Phi_a_ini * Psat_ini) / (R * T_ini) # artificial behavior to mimic N2 accumulation due to anodic recirculation.
     end
-    C_N2_cgc_ini = (1 - y_O2_ext) * (Pc_ini - Phi_c_ini * Psat_ini) / (R * T_ini)
+    C_N2_cgc_ini = (1 - y_O2_ext - oc.y_H2_cathode_in - oc.y_CO2_cathode_in) * (Pc_ini - Phi_c_ini * Psat_ini) / (R * T_ini)
 
     s_ini = 0.0
     # Ionomer water content: each CL equilibrates with its own local humidity at rest.
@@ -283,6 +431,31 @@ function create_initial_variable_values(simu::AlphaPEM)::Vector{Float64}
     eta_c_ini = R * T_ini / (alpha_c * F) * log((i_fc_ini + i_n_ini) / i0_c_ref *
                                                  1 / exp(-Eact_O2_red / R * (1 / T_ini - 1 / Tref_O2_red)) *
                                                  (C_O2ref_red / C_O2_Pt_ini)^kappa_c)
+    # Initialize each double layer at its local multireaction Faraday balance.
+    # Legacy mode keeps these potentials constant after initialization.
+    rp = simu.cfg.reaction_parameters
+    C_CO2_a_ini = oc.y_CO2_anode_in*(Pa_ini-Phi_a_ini*Psat_ini)/(R*T_ini)
+    C_CO2_c_ini = oc.y_CO2_cathode_in*(Pc_ini-Phi_c_ini*Psat_ini)/(R*T_ini)
+    anode_ini = ElectrodeState(T_ini, C_H2_ini, C_O2_a_ini, 0.0, pp.Hacl,nothing,C_CO2_a_ini,simu.cfg.enable_cor)
+    cathode_ini = ElectrodeState(T_ini, C_H2_c_ini, C_O2_ini, 0.0, pp.Hccl,nothing,C_CO2_c_ini,simu.cfg.enable_cor)
+    pt_a_ini, pt_c_ini = PtCoverage(), PtCoverage()
+    if simu.cfg.enable_pt_oxide
+        prescribed = PtCoverage(simu.cfg.initial_pt_coverages...)
+        a = initialize_pt_electrode(anode_ini, rp; side=:acl,
+            mode=simu.cfg.pt_oxide_initialization, coverage=prescribed, external_current=i_fc_ini)
+        ratio = R_T_O2_Pt(s_ini, lambda_ccl_ini, T_ini, pp.Hccl, pp.K_O2_ad_Pt, pp) /
+                a_c(:ccl, lambda_ccl_ini, T_ini, pp.Hccl, pp)
+        c = initialize_pt_electrode(cathode_ini, rp; side=:ccl,
+            mode=simu.cfg.pt_oxide_initialization, coverage=prescribed,
+            external_current=-i_fc_ini, transport_ratio=ratio)
+        phi_a_ini, phi_c_ini = a.phi, c.phi
+        pt_a_ini, pt_c_ini = a.coverage, c.coverage
+    else
+        phi_a_ini = stationary_potential(anode_ini, rp.roughness_a, rp;
+                                         external_current=i_fc_ini, C_O2_Pt=C_O2_a_ini, side=:acl)
+        phi_c_ini = stationary_potential(cathode_ini, rp.roughness_c, rp;
+                                         external_current=-i_fc_ini, C_O2_Pt=C_O2_Pt_ini)
+    end
 
     # Initial auxiliary system state.
     Wcp_ini = 0.0
@@ -319,6 +492,11 @@ function create_initial_variable_values(simu::AlphaPEM)::Vector{Float64}
         "C_N2_agc" => C_N2_agc, "C_N2_acl" => C_N2_acl, "C_N2_ccl" => C_N2_ccl, "C_N2_cgc" => C_N2_cgc,
         "T_agc" => T_agc, "T_acl" => T_acl, "T_mem" => T_mem, "T_ccl" => T_ccl, "T_cgc" => T_cgc,
         "eta_c" => eta_c,
+        "phi_a" => phi_a_ini, "phi_c" => phi_c_ini,
+        "theta_PtOH_acl" => pt_a_ini.OH, "theta_Pt_sO_acl" => pt_a_ini.sO,
+        "theta_Pt_bO_acl" => pt_a_ini.bO,
+        "theta_PtOH_ccl" => pt_c_ini.OH, "theta_Pt_sO_ccl" => pt_c_ini.sO,
+        "theta_Pt_bO_ccl" => pt_c_ini.bO,
     )
     for i in 1:nb_gdl
         values_1D["C_v_agdl_$(i)"] = C_v_agdl
@@ -343,6 +521,16 @@ function create_initial_variable_values(simu::AlphaPEM)::Vector{Float64}
         values_1D["C_N2_cmpl_$(i)"] = C_N2_cmpl
         values_1D["T_ampl_$(i)"] = T_ampl
         values_1D["T_cmpl_$(i)"] = T_cmpl
+    end
+    for name in names_1D
+        if startswith(name, "C_O2_a")
+            values_1D[name] = C_O2_a_ini
+        elseif startswith(name, "C_H2_c")
+            values_1D[name] = C_H2_c_ini
+        end
+    end
+    for name in names_1D
+        startswith(name,"C_CO2_") && (values_1D[name] = occursin(r"^C_CO2_a",name) ? C_CO2_a_ini : C_CO2_c_ini)
     end
     initial_variable_values_1D = [values_1D[name] for name in names_1D]
     # Replication for each gas channel node.
@@ -404,14 +592,32 @@ function _create_dae_initial_values!(simu::AlphaPEM,
 
     # Initialise the algebraic DAE states directly from the differential state.
     i_fc_0 = fill(i_fc_cell_0, nb_gc)
-    C_O2_Pt_ref = calculate_C_O2_Pt(i_fc_cell_0, sv_cell_1D[1], simu.fuel_cell)
+    oxygen_consuming_current = simu.cfg.electrochemistry_model == :multireaction_potential ?
+                               max(i_fc_cell_0, 0.0) : i_fc_cell_0
+    C_O2_Pt_ref = calculate_C_O2_Pt(oxygen_consuming_current, sv_cell_1D[1], simu.fuel_cell)
     C_O2_Pt_0 = fill(C_O2_Pt_ref, nb_gc)
-    U_cell_0 = calculate_cell_voltage(i_fc_cell_0, C_O2_Pt_ref, sv_cell_1D[1], simu.fuel_cell)
+    if simu.cfg.enable_pt_oxide
+        rp = simu.cfg.reaction_parameters
+        pp = simu.fuel_cell.physical_parameters
+        for k in 1:nb_gc
+            cl = sv_cell_1D[k].ccl
+            state = ElectrodeState(cl.T, cl.C_H2, cl.C_O2, cl.phi_c, pp.Hccl,
+                PtCoverage(cl.theta_PtOH, cl.theta_Pt_sO, cl.theta_Pt_bO),cl.C_CO2,simu.cfg.enable_cor)
+            ratio = R_T_O2_Pt(cl.s, cl.lambda, cl.T, pp.Hccl, pp.K_O2_ad_Pt, pp) /
+                     a_c(:ccl, cl.lambda, cl.T, pp.Hccl, pp)
+            C_O2_Pt_0[k] = resolve_pt_oxygen(state, rp, ratio)
+        end
+    end
+    U_cell_0 = if simu.cfg.electrochemistry_model == :multireaction_potential
+        calculate_cell_voltage_from_potentials(i_fc_cell_0, sv_cell_1D[1], simu.fuel_cell)
+    else
+        calculate_cell_voltage(i_fc_cell_0, C_O2_Pt_ref, sv_cell_1D[1], simu.fuel_cell)
+    end
 
     # Approximate inlet pressures from the current GC gas states, then deduce
     # the inlet molar flows directly from the desired-flow model.
-    Pa_in_0 = (sv_cell_1D[1].agc.C_v + sv_cell_1D[1].agc.C_H2 + sv_cell_1D[1].agc.C_N2) * R * sv_cell_1D[1].agc.T
-    Pc_in_0 = (sv_cell_1D[1].cgc.C_v + sv_cell_1D[1].cgc.C_O2 + sv_cell_1D[1].cgc.C_N2) * R * sv_cell_1D[1].cgc.T
+    Pa_in_0 = (sv_cell_1D[1].agc.C_v + sv_cell_1D[1].agc.C_H2 + sv_cell_1D[1].agc.C_N2 + sv_cell_1D[1].agc.C_O2 + sv_cell_1D[1].agc.C_CO2) * R * sv_cell_1D[1].agc.T
+    Pc_in_0 = (sv_cell_1D[1].cgc.C_v + sv_cell_1D[1].cgc.C_O2 + sv_cell_1D[1].cgc.C_N2 + sv_cell_1D[1].cgc.C_H2 + sv_cell_1D[1].cgc.C_CO2) * R * sv_cell_1D[1].cgc.T
     W_des_0 = desired_flows(sv_cell_1D, i_fc_cell_0, Pa_in_0, Pc_in_0, simu.fuel_cell, simu.cfg)
     J_a_in_0 = (W_des_0.H2 + W_des_0.H2O_inj_a) / (pp.Hagc * pp.Wagc) / pp.nb_cell / pp.nb_channel_in_gc
     J_c_in_0 = (W_des_0.dry_air + W_des_0.H2O_inj_c) / (pp.Hcgc * pp.Wcgc) / pp.nb_cell / pp.nb_channel_in_gc
@@ -486,13 +692,16 @@ end
 
 Returns `(jacobian!, jac_prototype)` ready to be passed to `DAEFunction`."""
 function _build_jacobian_closure(residual!, packed, simu::AlphaPEM, dims,
-                                  initial_scaled_variable_values::AbstractVector{Float64})
+                                  initial_scaled_variable_values::AbstractVector{Float64};
+                                  nonnegative_indices=Int[],local_step_indices=Int[])
     jac_prototype = _build_dae_jacobian_prototype(residual!, packed,
                                                    simu.initial_derivative_values,
                                                    initial_scaled_variable_values,
                                                    simu.time_interval[1],
-                                                   dims.differential_vars)
-    jac_cache = _build_jacobian_coloring_cache(jac_prototype, dims.differential_vars)
+                                                   dims.differential_vars;
+                                                   nonnegative_indices,local_step_indices)
+    jac_cache = _build_jacobian_coloring_cache(jac_prototype, dims.differential_vars;
+                                              nonnegative_indices,local_step_indices)
     jacobian! = (J, dydt_IDA, y, p, gamma, t) ->
         _dae_jacobian_fd!(J, dydt_IDA, y, p, gamma, t, residual!, dims.differential_vars, jac_cache)
     return jacobian!, jac_prototype
@@ -513,11 +722,21 @@ and without the guard each of those steps would re-trigger the condition.
 """
 function _build_physical_safety_callback(n_diff::Int, nb_gc::Int,
                                            solver_state_scaling::AbstractVector{Float64},
-                                           triggered::Ref{Bool}=Ref(false))
+                                           triggered::Ref{Bool}=Ref(false);
+                                           allow_nonpositive_voltage::Bool=false,
+                                           pt_indices::Vector{NTuple{3,Int}}=NTuple{3,Int}[],
+                                           pt_max_layers::Float64=1.0)
+    pt_violation = u -> any(pt_indices) do indices
+        oh, so, bo = (u[i]*solver_state_scaling[i] for i in indices)
+        !all(isfinite, (oh,so,bo)) || oh < -1e-6 || so < -1e-6 ||
+            oh+so > 1+1e-6 || bo < -1e-6 || bo > pt_max_layers+1e-6
+    end
     condition = function (u, t, integrator)
         triggered[] && return false
+        pt_violation(u) && return true
         # U_cell is algebraic slot 1 after the differential block.
-        u[n_diff + 1] * solver_state_scaling[n_diff + 1] <= 0.0 && return true
+        !allow_nonpositive_voltage &&
+            u[n_diff + 1] * solver_state_scaling[n_diff + 1] <= 0.0 && return true
         # C_O2_Pt[k] occupies slots n_diff+2+nb_gc … n_diff+1+2*nb_gc.
         for k in 1:nb_gc
             idx = n_diff + 1 + nb_gc + k
@@ -530,7 +749,12 @@ function _build_physical_safety_callback(n_diff::Int, nb_gc::Int,
         u      = integrator.u
         t      = integrator.t
         U_cell = u[n_diff + 1] * solver_state_scaling[n_diff + 1]
-        if U_cell <= 0.0
+        if pt_violation(u)
+            coverages = [(indices=indices,
+                coverage=Tuple(u[i]*solver_state_scaling[i] for i in indices))
+                for indices in pt_indices]
+            @warn("Safety stop: Pt coverage left the physical surface or bulk inventory domain at t=$t s.", coverages)
+        elseif U_cell <= 0.0
             @warn("Safety stop: cell voltage U_cell = $(round(U_cell; digits=4)) V ≤ 0 " *
                   "at t = $(round(t; digits=6)) s. " *
                   "The requested current density exceeds the fuel cell operating limit. " *

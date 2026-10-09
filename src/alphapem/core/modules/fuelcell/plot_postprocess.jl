@@ -329,29 +329,30 @@ function calculate_reynolds_numbers(outputs::SimulationOutputs,
         C_v_agc  = extract_mea_series(outputs, i, mea -> mea.agc.C_v)
         C_H2_agc = extract_mea_series(outputs, i, mea -> mea.agc.C_H2)
         T_agc    = extract_mea_series(outputs, i, mea -> mea.agc.T)
+        C_O2_agc = extract_mea_series(outputs, i, mea -> mea.agc.C_O2)
+        C_CO2_agc = extract_mea_series(outputs,i,mea -> mea.agc.C_CO2)
+        C_N2_agc = extract_mea_series(outputs, i, mea -> mea.agc.C_N2)
+        C_H2_cgc = extract_mea_series(outputs, i, mea -> mea.cgc.C_H2)
         # Cathode GC state.
         C_v_cgc  = extract_mea_series(outputs, i, mea -> mea.cgc.C_v)
         C_O2_cgc = extract_mea_series(outputs, i, mea -> mea.cgc.C_O2)
+        C_CO2_cgc = extract_mea_series(outputs,i,mea -> mea.cgc.C_CO2)
         C_N2_cgc = extract_mea_series(outputs, i, mea -> mea.cgc.C_N2)
         T_cgc    = extract_mea_series(outputs, i, mea -> mea.cgc.T)
 
         for j in 1:n_t
-            # Anode: H₂O + H₂ mixture.
-            x_H2O_a = C_v_agc[j] + C_H2_agc[j] > 0 ?
-                      C_v_agc[j] / (C_v_agc[j] + C_H2_agc[j]) : 0.0
-            rho_a   = C_v_agc[j] * M_H2O + C_H2_agc[j] * M_H2
-            mu_a    = mu_mixture_gases([:H2O_v, :H2], [x_H2O_a, 1 - x_H2O_a], T_agc[j])
+            # All transported gases contribute to density and viscosity.
+            total_a = max(C_v_agc[j] + C_H2_agc[j] + C_O2_agc[j] + C_N2_agc[j] + C_CO2_agc[j], eps(Float64))
+            rho_a = C_v_agc[j]*M_H2O + C_H2_agc[j]*M_H2 + C_O2_agc[j]*M_O2 + C_N2_agc[j]*M_N2+C_CO2_agc[j]*M_CO2
+            mu_a = mu_mixture_gases(:H2O_v, C_v_agc[j]/total_a, :H2, C_H2_agc[j]/total_a,
+                                        :N2, C_N2_agc[j]/total_a, :O2, C_O2_agc[j]/total_a, :CO2,C_CO2_agc[j]/total_a, T_agc[j])
             Re_a[i][j] = mu_a > 0 ? rho_a * abs(v_a_i[j]) * Dh_a / mu_a : 0.0
 
-            # Cathode: H₂O + O₂ + N₂ mixture.
-            C_dry_c  = max(C_O2_cgc[j] + C_N2_cgc[j], eps(Float64))
-            y_O2_c   = C_O2_cgc[j] / C_dry_c
-            x_H2O_c  = C_v_cgc[j] + C_O2_cgc[j] + C_N2_cgc[j] > 0 ?
-                       C_v_cgc[j] / (C_v_cgc[j] + C_O2_cgc[j] + C_N2_cgc[j]) : 0.0
-            x_O2_c   = y_O2_c * (1 - x_H2O_c)
-            x_N2_c   = (1 - y_O2_c) * (1 - x_H2O_c)
-            rho_c    = C_v_cgc[j] * M_H2O + C_O2_cgc[j] * M_O2 + C_N2_cgc[j] * M_N2
-            mu_c     = mu_mixture_gases([:H2O_v, :O2, :N2], [x_H2O_c, x_O2_c, x_N2_c], T_cgc[j])
+            # All transported gases contribute to density and viscosity.
+            total_c = max(C_v_cgc[j] + C_H2_cgc[j] + C_O2_cgc[j] + C_N2_cgc[j] + C_CO2_cgc[j], eps(Float64))
+            rho_c = C_v_cgc[j]*M_H2O + C_H2_cgc[j]*M_H2 + C_O2_cgc[j]*M_O2 + C_N2_cgc[j]*M_N2+C_CO2_cgc[j]*M_CO2
+            mu_c = mu_mixture_gases(:H2O_v, C_v_cgc[j]/total_c, :O2, C_O2_cgc[j]/total_c,
+                                        :N2, C_N2_cgc[j]/total_c, :H2, C_H2_cgc[j]/total_c, :CO2,C_CO2_cgc[j]/total_c, T_cgc[j])
             Re_c[i][j] = mu_c > 0 ? rho_c * abs(v_c_i[j]) * Dh_c / mu_c : 0.0
         end
     end
