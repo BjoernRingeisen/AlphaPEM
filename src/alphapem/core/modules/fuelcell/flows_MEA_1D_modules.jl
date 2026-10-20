@@ -726,29 +726,20 @@ const DEFAULT_LAMBDA_CONSTITUTIVE_EPS = 1.0e-8
 const DEFAULT_NEGATIVE_EVENT_FLOOR = 1.0e-5
 const DEFAULT_LAMBDA_INVENTORY_EPS = 1.0e-4
 const DEFAULT_EOD_DONOR_LAMBDA_SCALE = 0.25
-const DEFAULT_S_EVAP_INVENTORY_EPS = 1.0e-8
+"""One-sided phase-transfer weight for a pressure excess in Pa.
 
-"""Availability factor for evaporation from the raw liquid saturation.
-
-Zero at non-positive saturation; s / (s + inventory_eps) for positive saturation.
-The factor is continuous at zero and smooth for positive saturation. It limits
-only the water-removing phase-transfer rate, without changing the solver state.
-The default transition scale follows an extension based on AlphaPEM V1.3 and requires validation in the
-integrated Julia model. This factor alone does not guarantee discrete positivity.
+Zero for x <= 0, 2u-u^2 for 0 < x < width (u=x/width), and one beyond width.
+Width zero selects an exact directional switch. The weight itself has a corner
+at zero; multiplying it by the vanishing logarithmic driver makes the RATE C1
+across equilibrium for width > 0. Width is numerical, not a material constant.
 """
-function _evaporation_inventory_limiter(
-        s,
-        inventory_eps=DEFAULT_S_EVAP_INVENTORY_EPS)
-    if !isfinite(inventory_eps) || inventory_eps <= 0.0
-        throw(ArgumentError(
-            "The evaporation inventory epsilon must be finite and positive."))
-    end
-
-    if s <= 0.0
-        return 0.0
-    end
-
-    return s / (s + inventory_eps)
+@inline function _phase_change_direction_weight(x, pressure_width)
+    isfinite(pressure_width) && pressure_width >= 0.0 ||
+        throw(ArgumentError("The phase-change pressure width must be finite and >= 0 Pa."))
+    x <= 0.0 && return 0.0
+    (pressure_width == 0.0 || x >= pressure_width) && return 1.0
+    u = x / pressure_width
+    return u * (2.0 - u)
 end
 
 
@@ -899,30 +890,35 @@ function gamma_sorp_v(C_v, s, lambdaa, T, Hcl::Float64, pp::PhysicalParams)
 end
 
 
-"""This function calculates the phase transfer rate of water condensation or evaporation, in mol.m-3.s-1.
-It is positive for condensation and negative for evaporation.
+"""Calculate local molar phase transfer Svl in mol.m-3.s-1.
 
-Parameters
-----------
-element : Symbol
-    Specifies the element for which the phase transfer rate is calculated.
-s :
-    Liquid water saturation variable.
-C_v :
-    Water concentration variable in mol.m-3.
-Ctot :
-    Total gas concentration in mol.m-3.
-T :
-    Temperature in K.
-epsilon : Float64
-    Porosity.
-pp : PhysicalParams
-    Physical parameters of the fuel cell.
+Positive values are condensation; negative values are evaporation. The existing
+logarithmic pressure driver and gamma units (m-2) are retained. For pressure
+excess x = P_v - Psat_eff, use only the condensation branch if x > 0 and only
+the evaporation branch if x < 0. Their availability factors are respectively
+1-s_phase and s_phase, where s_phase=clamp(s,0,1) extends coefficients to
+nonphysical Newton trials without altering the solver state.
 
-Returns
--------
-Svl :
-    Phase transfer rate of water condensation or evaporation in mol.m-3.s-1.
+phase_change_pressure_width is a numerical transition width in Pa. With width
+zero, the separate logarithmic branches apply directly. For positive width,
+the active branch is multiplied by 2u-u^2 within 0 < abs(x) < width,
+u=abs(x)/width; outside it the branch is unchanged. The rate is C1 in the
+pressure transition, but this does not claim global smoothness at other clamps.
+The default 10 Pa is provisional and requires width/tolerance convergence tests.
+
+Gass et al., J. Electrochem. Soc. (2024), section 3.7, Eq. (32),
+https://doi.org/10.1149/1945-7111/ad305a, uses directional branches with
+liquid/gas availability but a DIFFERENT rate law and parameter units.
+This logarithmic regularization is not Eq. (32). Gass introduced tanh blending
+in a037960 (2025-09-15) and broadened it in 7a35a91 (2025-11-07) for numerical
+stability. The present bounded transition preserves that smoothing intent
+while avoiding evaporation weighted by gas availability, and vice versa.
+It changes the previous blended kinetics and is not yet a validated closure.
+
+The returned rate is shared by liquid/vapor balances and phase-change heat.
+No time-step-based rate cap or state projection is applied. These source
+boundary properties alone do not guarantee nonnegative discrete inventories
+or protect other transport/sorption mechanisms.
 """
 function Svl(element::Symbol,
              s,
@@ -931,43 +927,30 @@ function Svl(element::Symbol,
              T,
              epsilon::Float64,
              pp::PhysicalParams;
-             s_evap_inventory_eps=DEFAULT_S_EVAP_INVENTORY_EPS)
+             phase_change_pressure_width=Config.DEFAULT_PHASE_CHANGE_PRESSURE_WIDTH)
 
-    # Extraction of the parameters
     gamma_cond, gamma_evap = pp.gamma_cond, pp.gamma_evap
 
-    s_eff = _clamped_fraction_value(s)
+    # Exact endpoints for phase availability; do not change the integrated state.
+    s_phase = clamp(Float64(s), 0.0, 1.0)
     C_v_eff = _nonnegative_value(C_v)
     T_eff = _positive_temperature_value(T)
-    # Calculation of the total and partial pressures
-    Ptot = _positive_pressure_value(Ctot * R * T_eff) # Total pressure.
+    Ptot = _positive_pressure_value(Ctot * R * T_eff)
     P_v = _bounded_vapor_pressure_value(C_v_eff * R * T_eff, Ptot)
     Psat_eff = min(Psat(T_eff), prevfloat(Ptot))
 
-    # Determination of the diffusion coefficient at the anode or the cathode
-    if element == :anode
-        D_value = Da(Ptot, T_eff)  # Diffusion coefficient at the anode.
-    else  # element == :cathode
-        D_value = Dc(Ptot, T_eff)  # Diffusion coefficient at the cathode.
-    end
+    D_value = element == :anode ? Da(Ptot, T_eff) : Dc(Ptot, T_eff)
+    pressure_excess = P_v - Psat_eff
+    condensation_weight = _phase_change_direction_weight(
+        pressure_excess, phase_change_pressure_width)
+    evaporation_weight = _phase_change_direction_weight(
+        -pressure_excess, phase_change_pressure_width)
+    driver = log((Ptot - Psat_eff) / (Ptot - P_v))
+    prefactor = epsilon * D_value * Ptot / (R * T_eff)
 
-    Svl_cond = gamma_cond / (R * T_eff) * epsilon * (1 - s_eff) * D_value * Ptot * log((Ptot - Psat_eff) / (Ptot - P_v))
-    Svl_evap = gamma_evap / (R * T_eff) * epsilon * s_eff * D_value * Ptot * log((Ptot - Psat_eff) / (Ptot - P_v))
-
-    # Transition function between condensation and evaporation
-    K_transition = 3e-3 # This is a constant that defines the sharpness of the transition between two states.
-    w = 0.5 * (1 + tanh(K_transition * (Psat_eff - P_v))) # Transition function.
-
-    Svl_value = w * Svl_evap + (1 - w) * Svl_cond
-
-    # Use raw saturation for donor availability. The returned rate is shared by
-    # the liquid/vapor balances and the corresponding phase-change heat source.
-    if Svl_value < 0.0
-        return Svl_value *
-               _evaporation_inventory_limiter(s, s_evap_inventory_eps)
-    end
-
-    return Svl_value
+    return prefactor * driver * (
+        gamma_cond * (1.0 - s_phase) * condensation_weight +
+        gamma_evap * s_phase * evaporation_weight)
 end
 
 
