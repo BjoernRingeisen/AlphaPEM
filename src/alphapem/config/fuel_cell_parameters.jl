@@ -232,6 +232,10 @@ Base.@kwdef struct OperatingConditions <: AbstractFuelCellParams
     y_H2_cathode_in::Float64 = 0.0  # Dry cathode H2 fraction; displaces N2 (transport only).
     anode_flow_mode::Symbol = :hydrogen_stoichiometric # Or :equivalent_air during startup feed transitions.
     i_min_stoich::Float64 = 0.5     # Minimum current density used to compute the desired flows (A.cm-2)
+    # Optional fixed dry feed rates for the entire stack, before humidification.
+    # Supply both together; supported by the prescribed-boundary no-auxiliary model.
+    anode_dry_flow_mol_s::Union{Nothing,Float64} = nothing
+    cathode_dry_flow_mol_s::Union{Nothing,Float64} = nothing
 end
 
 
@@ -357,6 +361,15 @@ requires hydrogen at the anode.
 """
 function validate_gas_feed(oc::OperatingConditions, type_auxiliary::Symbol=:no_auxiliary,
                            electrochemistry_model::Symbol=:legacy)
+    fixed_a, fixed_c = oc.anode_dry_flow_mol_s, oc.cathode_dry_flow_mol_s
+    isnothing(fixed_a) == isnothing(fixed_c) ||
+        throw(ArgumentError("Specify both anode and cathode fixed dry flow rates."))
+    if fixed_a !== nothing
+        type_auxiliary == :no_auxiliary ||
+            throw(ArgumentError("Fixed dry feed rates require type_auxiliary=:no_auxiliary."))
+        all(x -> isfinite(x) && x > 0, (fixed_a, fixed_c)) ||
+            throw(ArgumentError("Fixed dry feed rates must be finite and positive (mol/s for the entire stack)."))
+    end
     oc.anode_flow_mode in (:hydrogen_stoichiometric, :equivalent_air) ||
         throw(ArgumentError("anode_flow_mode must be :hydrogen_stoichiometric or :equivalent_air."))
     isfinite(oc.y_H2_in) && 0 <= oc.y_H2_in <= 1 ||
