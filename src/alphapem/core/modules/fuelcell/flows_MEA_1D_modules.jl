@@ -3,6 +3,18 @@
 """This module is used to calculate intermediate values for the flows calculation.
 """
 
+"""Liquid saturation used only to evaluate liquid-water transport.
+
+Return max(s, 0) with an exact zero endpoint. This extends the transport law
+to negative nonlinear-solver trials without changing the integrated state,
+its inventory, or the transport law for any nonnegative saturation.
+There is no positive floor, upper saturation clamp, or time-step rate cap.
+The extension has a kink at zero and does not enforce discrete positivity.
+GC advection retains the existing flow-direction convention; this helper
+does not supply an upwind treatment for reversed gas velocities.
+"""
+@inline _liquid_transport_saturation(s) = max(s, zero(s))
+
 # _____________________________________________________Flow modules_____________________________________________________
 
 """Calculate intermediate values for the flows calculation.
@@ -888,6 +900,36 @@ function gamma_sorp_v(C_v, s, lambdaa, T, Hcl::Float64, pp::PhysicalParams)
 
     return w * gamma_abs + (1 - w) * gamma_des # Interpolation between absorption and desorption.
 end
+
+
+"""Limit vapor uptake only by the donor vapor concentration (mol.m-3).
+
+Positive source transfers water from vapor to ionomer. Negative desorption is
+unchanged. The compact availability is zero at C_v <= 0, 3u^2-2u^3 for
+u=C_v/concentration_width in (0,1), and exactly one above that interval.
+The integrated state, equilibrium isotherm and gas-pore factor are not changed.
+
+The width is an explicit numerical regularization, not a measured sorption
+constant. Its provisional default is comparable to the current absolute
+concentration tolerance but is independent of atol and of the solver time step.
+The factor is C1 in concentration; the directed source can have a derivative
+kink at source == 0. This is not a globally smooth or newly validated kinetic law.
+It prevents uptake from an empty vapor donor in the continuous source term;
+it does not guarantee nonnegative discrete inventories or protect other sinks.
+
+Return this one source to both water balances and the sorption heat calculation.
+"""
+@inline function _limit_directed_vapor_sorption(source, C_v,
+        concentration_width=Config.DEFAULT_SORPTION_VAPOR_CONCENTRATION_WIDTH)
+    isfinite(concentration_width) && concentration_width > 0 ||
+        throw(ArgumentError("The vapor sorption concentration width must be finite and positive (mol.m-3)."))
+    source <= 0 && return source
+    C_v <= 0 && return zero(source)
+    C_v >= concentration_width && return source
+    u = C_v / concentration_width
+    return source * (u * u * (3 - 2 * u))
+end
+
 
 
 """Calculate local molar phase transfer Svl in mol.m-3.s-1.
