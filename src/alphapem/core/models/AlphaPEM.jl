@@ -17,6 +17,7 @@ The model is one-dimensional, dynamic, biphasic, and isothermal. It has been pub
 using DifferentialEquations
 using SparseArrays: sparse, SparseMatrixCSC, rowvals, nzrange, nonzeros, nnz
 using SciMLBase: DAEFunction, NoInit, successful_retcode, ReturnCode
+import Sundials
 using Sundials: IDA, IDASetMaxStep
 using .PlotHelpers: _clear_dynamic_axes!, _clear_dynamic_legends!, saving_instructions!
 using ...Currents: saveat_times
@@ -35,6 +36,17 @@ mutable struct AlphaPEM
     outputs::Union{Nothing, SimulationOutputs}
     sol
     last_solver_du::Union{Nothing, Vector{Float64}}            # du/dt at tf, written by the endpoint callback
+    newton_verification::Any # Private per-solve state; immutable counters after cleanup.
+end
+
+# Preserve the existing nine-argument construction interface.
+AlphaPEM(fc, cd, cfg, interval, values, rates, outputs, sol, last_du) =
+    AlphaPEM(fc, cd, cfg, interval, values, rates, outputs, sol, last_du, nothing)
+
+"""Read numerical counters without exposing mutable native solver state."""
+function _newton_verification_diagnostics(simu::AlphaPEM)
+    status = simu.newton_verification
+    return status isa Ref ? _newton_verification_stats(status) : status
 end
 
 """Create an `AlphaPEM` simulator from typed fuel-cell, current-profile, and configuration objects.
@@ -86,6 +98,9 @@ save_times : Union{Nothing, AbstractVector{<:Real}}, keyword
     Optional physical-time output grid. IDA stops at these instants so saved
     constrained states are accepted steps. The default uses the existing
     rate-limited saving and current-profile sampling.
+callback : optional SciML callback
+    Read-only observer, executed after native forwarding/safety/restart capture
+    and before saving; use u_modified!(integrator,false) if state is unchanged.
 
 Returns
 -------
@@ -96,14 +111,17 @@ function simulate_model!(simu::AlphaPEM,
                          initial_variable_values::Union{Nothing, Vector{Float64}}=nothing,
                          initial_derivative_values::Union{Nothing, Vector{Float64}}=nothing,
                          time_interval::Union{Nothing, Tuple{Float64, Float64}}=nothing;
-                         save_times::Union{Nothing,AbstractVector{<:Real}}=nothing)
+                         save_times::Union{Nothing,AbstractVector{<:Real}}=nothing, callback=nothing)
 
     # ── 1. Precondition checks ─────────────────────────────────────────────────
     validate_config(simu.cfg)
     validate_gas_feed(simu.fuel_cell.operating_conditions, simu.cfg.type_auxiliary,
                       simu.cfg.electrochemistry_model)
     _check_simulation_preconditions!(simu)
+    _check_newton_verification_backend()
     simu.outputs = nothing
+    verification_slot=Ref{Any}(nothing)
+    simu.newton_verification=verification_slot
 
     # ── 2. Time interval and initial physical state ────────────────────────────
     simu.time_interval = time_interval === nothing ? simu.current_density.time_interval : time_interval
@@ -216,15 +234,34 @@ function simulate_model!(simu::AlphaPEM,
     water_names=canonical_cell_solver_variable_names_1D(np.nb_gdl,np.nb_mpl)
     water_indices=[(k-1)*length(water_names)+j for k in 1:np.nb_gc
                    for j in eachindex(water_names) if startswith(water_names[j],"s_")]
+    nonnegative_indices = unique(vcat(collect(Iterators.flatten(pt_indices)),
+        trace_indices,water_indices,pt_oxygen_indices,co2_indices,reactant_indices))
+    local_step_indices = vcat(trace_indices,pt_oxygen_indices)
     jacobian!, jac_prototype = _build_jacobian_closure(residual!, packed, simu, dims,
                                                         initial_scaled_variable_values;
-                                                        nonnegative_indices=vcat(collect(Iterators.flatten(pt_indices)),trace_indices,water_indices,pt_oxygen_indices),
-                                                        local_step_indices=vcat(trace_indices,pt_oxygen_indices))
+                                                        nonnegative_indices=nonnegative_indices,local_step_indices=local_step_indices)
 
     # ── 9. Callbacks ───────────────────────────────────────────────────────────
     # A zero-current multireaction conditioning segment can legitimately pass
     # through zero voltage while the anode feed changes from air to hydrogen.
     # Keep the overload guard active for every segment that requests load.
+    saveat_arg = sort!(unique!(vcat(
+        saveat_times(simu.current_density, simu.time_interval, np.save_freq), requested_times)))
+    constraints, liquid_indices = _build_liquid_solver_constraints(simu,dims,solver_state_scaling,initial_scaled_variable_values)
+    inventory_indices = unique(vcat(liquid_indices,collect(Iterators.flatten(pt_indices)),co2_indices,reactant_indices))
+    for index in inventory_indices
+        isfinite(initial_scaled_variable_values[index]) && initial_scaled_variable_values[index]>=0 ||
+            throw(ArgumentError("Negative initial constrained inventory at index $index; states are not projected."))
+        constraints[index] = 1.0
+    end
+    algorithm = IDA(linear_solver=:KLU, nonlinear_convergence_coefficient=0.033,
+                    max_nonlinear_iters=8)
+    native_endpoint_cb = _build_native_liquid_endpoint_callback(inventory_indices,initial_scaled_variable_values,
+        simu.time_interval[1],algorithm.nonlinear_convergence_coefficient;verification_slot=verification_slot)
+    verification_packed,verification_residual! = _build_dae_residual(simu,dims,copy(solver_state_scaling),
+        copy(initial_scaled_variable_values),Ref(false))
+    newton_verifier = _build_newton_verifier(verification_residual!,verification_packed,jac_prototype,
+        dims.differential_vars;nonnegative_indices=nonnegative_indices,local_step_indices=local_step_indices)
     zero_current_conditioning = _is_zero_current_conditioning(simu.cfg)
     safety_cb = _build_physical_safety_callback(n_diff, np.nb_gc, solver_state_scaling,
                                                  safety_triggered;
@@ -234,10 +271,11 @@ function simulate_model!(simu::AlphaPEM,
     dtmax_cb  = _build_dtmax_callback(simu)
     timeout_cb = _build_timeout_callback(np.max_run_time_s)
     endpoint_du_cb = _build_endpoint_du_callback(simu)
-    saving_cb = _build_rate_limited_saving_callback(np.save_freq, simu.time_interval[1])
+    saving_cb = _build_rate_limited_saving_callback(np.save_freq,simu.time_interval[1];
+        mandatory_times=saveat_arg,only_mandatory=!isempty(requested_times))
 
-    callbacks = CallbackSet(safety_cb, endpoint_du_cb,
-                            (isempty(requested_times) ? (saving_cb,) : ())...,
+    callbacks = CallbackSet(native_endpoint_cb,safety_cb,endpoint_du_cb,
+                            (callback===nothing ? () : (callback,))...,saving_cb,
                             (dtmax_cb  === nothing ? () : (dtmax_cb,))...,
                             (timeout_cb === nothing ? () : (timeout_cb,))...)
 
@@ -248,23 +286,23 @@ function simulate_model!(simu::AlphaPEM,
                           differential_vars=dims.differential_vars)
     init_alg = NoInit()
     tstops     = solver_tstops(simu.current_density, simu.time_interval)
-    saveat_arg = saveat_times(simu.current_density, simu.time_interval, np.save_freq)
-    if !isempty(requested_times)
-        saveat_arg=sort!(unique!(vcat(saveat_arg,requested_times)))
-        tstops=sort!(unique!(vcat(tstops,requested_times)))
-    end
-    simu.sol = _solve_with_pt_constraints(prob, IDA(linear_solver=:KLU), pt_indices;
-                     additional_nonnegative_indices=vcat(co2_indices,reactant_indices),
+    tstops=sort!(unique!(vcat(tstops,saveat_arg)))
+    try
+        simu.sol = _solve_with_liquid_constraints(prob,algorithm,constraints;
+                     newton_verifier=newton_verifier,verification_slot=verification_slot,
                      reltol         = np.rtol,
                      abstol         = atol_scaled,
                      tstops         = tstops,
                      dtmax          = solver_dtmax(simu.current_density, simu.time_interval[1]),
                      initializealg  = init_alg,
                      maxiters       = np.maxiters,
-                     saveat         = saveat_arg,
+                     saveat         = Float64[],
                      save_everystep = false,
                      dense          = false,
                      callback       = callbacks)
+    finally
+        simu.newton_verification=_newton_verification_stats(verification_slot)
+    end
 
     # ── 11. Convergence check ──────────────────────────────────────────────────
     # ReturnCode.Terminated is accepted: the safety callback stopped the solver
@@ -276,6 +314,162 @@ function simulate_model!(simu::AlphaPEM,
     # ── 12. Output recovery ────────────────────────────────────────────────────
     recovery!(simu)
     return nothing
+end
+
+
+"""Build native IDA s >= 0 constraints from the canonical differential-state order.
+
+Dry initial states are valid. No state is projected and no positive floor is
+introduced. These constraints cover liquid saturation only, not gas inventories,
+lambda or the upper saturation boundary.
+"""
+function _build_liquid_solver_constraints(simu::AlphaPEM, dims, scaling, y0)
+    np = simu.cfg.numerical_parameters
+    names = canonical_cell_solver_variable_names_1D(np.nb_gdl, np.nb_mpl)
+    width = dims.n_vars_cell_1D
+    width == length(names) || error("Liquid constraint state ordering changed.")
+    length(y0) == length(scaling) == length(dims.differential_vars) ||
+        error("Liquid constraint layout does not match the DAE state.")
+    all(x -> isfinite(x) && x > 0, scaling) ||
+        error("Liquid constraints require finite positive state scaling.")
+    local_indices = findall(name -> startswith(name, "s_"), names)
+    expected_local = 2 * np.nb_gdl + 2 * np.nb_mpl + 4
+    length(local_indices) == expected_local ||
+        error("Unexpected number of liquid saturation states.")
+    indices = [(k - 1) * width + j for k in 1:np.nb_gc for j in local_indices]
+    all(i -> dims.differential_vars[i], indices) ||
+        error("A liquid constraint refers to an algebraic state.")
+    all(i -> isfinite(y0[i]) && y0[i] >= 0, indices) ||
+        throw(ArgumentError("Initial liquid saturation violates s >= 0; states are not projected."))
+    constraints = zeros(Float64, length(y0))
+    constraints[indices] .= 1.0
+    return constraints, indices
+end
+
+"""Forward IDA's existing internal endpoint pair before downstream callbacks.
+
+The indices include every nonnegative inventory installed for this solve:
+liquid saturations plus enabled Pt coverages and gas concentrations.
+
+IDA may correct its constrained history while its returned buffers differ.
+Use the existing integrator interpolation API at the current native endpoint;
+do not clip values, reinitialise IDA or alter its history. Weighted maximum
+and RMS differences are diagnostics, not additional step-acceptance criteria.
+The configured Newton coefficient is only a reporting reference: it is not
+a per-component bound on IDA's native constraint corrections. A new maximum
+above this reference is reported without changing IDA's accepted pair.
+These differences alone establish neither accuracy nor conservation.
+Native negative values
+within 64*eps(Float64)*max(1,abs(native),abs(returned)) in scaled coordinates
+are reported once and retained unchanged; larger violations are errors.
+This reporting threshold is not a proof of roundoff or a physical inventory floor.
+Negative Newton trials
+remain the responsibility of the constitutive extensions and native solver.
+"""
+function _build_native_liquid_endpoint_callback(indices, y0, t0, coefficient;
+                                                verification_slot=nothing)
+    isfinite(coefficient) && coefficient > 0 ||
+        throw(ArgumentError("Invalid native endpoint diagnostic reference."))
+    native_y = similar(y0)
+    native_dy = similar(y0)
+    weights = similar(y0)
+    native_time = Ref{Float64}(0.0)
+    roundoff_reported = Ref(false)
+    largest_reported_mismatch = Ref(Float64(coefficient))
+    condition(u, t, integrator) = t > t0
+    affect! = function (integrator)
+        original_flag = integrator.flag
+        weights_nv = nothing
+        try
+            flag = Sundials.IDAGetCurrentTime(integrator.mem, native_time)
+            flag == 0 || error("IDAGetCurrentTime failed: $flag")
+            t = Float64(integrator.t)
+            tn = native_time[]
+            tolerance = 64 * eps(Float64) * max(1.0, abs(t), abs(tn))
+            isfinite(t) && isfinite(tn) && abs(t - tn) <= tolerance ||
+                error("Liquid endpoint time mismatch: callback=$t, native=$tn.")
+            # Query into private buffers. The API writes integrator.flag; retain
+            # the original IDASolve status for the integrator's own error checks.
+            integrator(native_y, t, Val{0})
+            integrator.flag == 0 || error("IDA native state query failed.")
+            integrator(native_dy, t, Val{1})
+            integrator.flag == 0 || error("IDA native derivative query failed.")
+            all(isfinite, native_y) && all(isfinite, native_dy) &&
+                all(isfinite, integrator.u) && all(isfinite, integrator.du) ||
+                error("Nonfinite native or returned IDA endpoint pair.")
+            # This is a floating-point reporting convention, not an IDA error
+            # tolerance. Keep tiny negative values unchanged; never project them.
+            all(i -> native_y[i] >= -64 * eps(Float64) *
+                         max(1.0, abs(native_y[i]), abs(integrator.u[i])), indices) ||
+                error("Native IDA endpoint violates a nonnegative inventory constraint beyond roundoff.")
+            if !roundoff_reported[] && any(i -> native_y[i] < 0, indices)
+                @warn "Native IDA constrained inventory is negative within the roundoff reporting threshold; values are retained unchanged." time_s=t minimum_scaled_inventory=minimum(native_y[indices])
+                roundoff_reported[] = true
+            end
+            weights_nv = Sundials.NVector(weights, integrator.u_nvec.ctx)
+            GC.@preserve integrator weights weights_nv begin
+                flag = Sundials.IDAGetErrWeights(integrator.mem, weights_nv)
+                flag == 0 || error("IDAGetErrWeights failed: $flag")
+                all(x -> isfinite(x) && x > 0, weights) ||
+                    error("Invalid native IDA error weights.")
+                weighted_difference = abs.(native_y .- integrator.u) .* weights
+                mismatch, critical_index = findmax(weighted_difference)
+                mismatch_wrms = sqrt(sum(abs2, weighted_difference) / length(weighted_difference))
+                isfinite(mismatch) && isfinite(mismatch_wrms) ||
+                    error("Nonfinite native endpoint difference diagnostics.")
+                if mismatch > largest_reported_mismatch[]
+                    @warn "Native IDA endpoint differs from returned buffers; forwarding the native pair. The Newton coefficient is a diagnostic reference, not a per-component acceptance bound." time_s=t maximum_weighted_difference=mismatch wrms_weighted_difference=mismatch_wrms diagnostic_reference=coefficient component_index=critical_index returned_scaled_value=integrator.u[critical_index] native_scaled_value=native_y[critical_index]
+                    largest_reported_mismatch[] = mismatch
+                end
+            end
+            verification_slot === nothing ||
+                _check_verified_newton_endpoint!(verification_slot, integrator, native_y, native_dy)
+            copyto!(integrator.u, native_y)
+            copyto!(integrator.du, native_dy)
+            u_modified!(integrator, false)
+        finally
+            integrator.flag = original_flag
+            GC.@preserve integrator weights begin
+                weights_nv === nothing || finalize(weights_nv)
+            end
+        end
+        return nothing
+    end
+    return DiscreteCallback(condition, affect!; save_positions=(false, false))
+end
+
+"""Install the combined inventory constraints and verified native Newton solver.
+
+The vector includes liquid, enabled Pt and gas inventories. IDA receives one
+constraint vector, so installing one protection cannot overwrite another.
+"""
+function _solve_with_liquid_constraints(prob, algorithm, constraints;
+        newton_verifier=nothing, verification_slot=Ref{Any}(nothing), kwargs...)
+    newton_verifier === nothing && error("Productive IDA integration requires Newton verification.")
+    integrator = init(prob, algorithm; kwargs...)
+    constraints_nv = nothing
+    try
+        constraints_nv = Sundials.NVector(constraints, integrator.u_nvec.ctx)
+        GC.@preserve integrator constraints constraints_nv begin
+            flag = Sundials.IDASetConstraints(integrator.mem, constraints_nv)
+            flag == 0 || error("IDASetConstraints failed: $flag; protection is not disabled.")
+            _install_newton_verification!(verification_slot, integrator, newton_verifier)
+            solve!(integrator)
+            verification_slot[].failure === nothing ||
+                error("DAE Newton verification failed: " * verification_slot[].failure)
+        end
+        return integrator.sol
+    finally
+        # IDA owns its internal constraint copy. Release our wrapper while its
+        # SUNContext owner, integrator, is still alive.
+        try
+            _release_newton_verification!(verification_slot)
+        finally
+            GC.@preserve integrator constraints begin
+                constraints_nv === nothing || finalize(constraints_nv)
+            end
+        end
+    end
 end
 
 
@@ -790,7 +984,11 @@ function _build_dtmax_callback(simu::AlphaPEM)
         return nothing
     end
 
-    affect!(integrator) = IDASetMaxStep(integrator.mem, solver_dtmax(simu.current_density, integrator.t))
+    affect!(integrator) = begin
+        flag = IDASetMaxStep(integrator.mem, solver_dtmax(simu.current_density, integrator.t))
+        flag == 0 || error("IDASetMaxStep failed: $flag")
+        u_modified!(integrator, false)
+    end
 
     return PresetTimeCallback(tstops, affect!)
 end
@@ -811,13 +1009,16 @@ Without this cap, `save_everystep=true` would append one full state copy to
 accumulates ~1.6 GB and makes Julia's GC quadratically slower as the heap
 grows, to the point the solver appears to hang rather than terminate.
 """
-function _build_rate_limited_saving_callback(save_freq::Float64, t0::Float64)
+function _build_rate_limited_saving_callback(save_freq::Float64, t0::Float64;
+                                             mandatory_times=Float64[],only_mandatory::Bool=false)
     min_dt = 1.0 / save_freq
     last_saved_t = Ref(t0)
-    condition(u, t, integrator) = (t - last_saved_t[]) >= min_dt
+    mandatory = Set(mandatory_times)
+    condition(u,t,integrator) = t in mandatory || (!only_mandatory && (t-last_saved_t[])>=min_dt)
     affect!(integrator) = begin
         last_saved_t[] = integrator.t
         savevalues!(integrator, true)
+        u_modified!(integrator, false)
     end
     return DiscreteCallback(condition, affect!; save_positions=(false, false))
 end
@@ -879,7 +1080,10 @@ function _build_endpoint_du_callback(simu::AlphaPEM)
     # forcing IDA to relearn the derivative at each :live segment start.
     return PresetTimeCallback(
         [tf],
-        integrator -> (simu.last_solver_du = copy(integrator.du));
+        integrator -> begin
+            simu.last_solver_du = copy(integrator.du)
+            u_modified!(integrator, false)
+        end;
         save_positions=(false, false),
         filter_tstops=false,
     )

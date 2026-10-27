@@ -21,23 +21,11 @@ end
 
 """Directional time derivative of catalyst-layer porosity from lambda and temperature rates."""
 @inline function cl_porosity_rate(element, lambda_cl, T_cl, Hcl, pp, dlambda_dt, dT_dt)
-    (iszero(dlambda_dt) && iszero(dT_dt)) && return 0.0
-    delta_t = 1e-6 / max(abs(dlambda_dt), abs(dT_dt), 1.0)
-    epsilon_plus = epsilon_cl(element, lambda_cl + delta_t * dlambda_dt,
-                              T_cl + delta_t * dT_dt, Hcl, pp)
-    epsilon_minus = epsilon_cl(element, lambda_cl - delta_t * dlambda_dt,
-                               T_cl - delta_t * dT_dt, Hcl, pp)
-    return (epsilon_plus - epsilon_minus) / (2delta_t)
+    return epsilon_cl_time_derivative(element, lambda_cl, T_cl, Hcl, pp, dlambda_dt, dT_dt)
 end
 
 """Temperature derivative of the liquid-density correlation, including its clamp."""
-@inline function liquid_density_temperature_slope(T)
-    T==Utils._liquid_water_temperature_value(T) || return 0.0
-    c=T-273.15
-    numerator_slope=16.945176-2*7.9870401e-3*c-3*46.170461e-6*c^2+
-        4*105.56302e-9*c^3-5*280.54253e-12*c^4
-    return (numerator_slope-rho_H2O_l(T)*16.879850e-3)/(1+16.879850e-3*c)
-end
+@inline liquid_density_temperature_slope(T) = drho_H2O_l_dT(T)
 
 """Conserve liquid mass epsilon*s*rho(T) as pore volume and temperature change."""
 @inline function liquid_saturation_rate(s, mass_rhs, epsilon, T, dT_dt=0.0, d_epsilon_dt=0.0)
