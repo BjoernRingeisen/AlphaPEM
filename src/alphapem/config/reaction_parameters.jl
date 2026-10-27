@@ -21,7 +21,7 @@ Base.@kwdef struct ReactionParams
     concentration_floor::Float64 = 1e-30
     concentration_scale::Float64 = 1e-6
     availability_order::Float64 = 4.0
-    inventory_time::Float64 = 1e-2
+    inventory_time::Float64 = 1e-4 # s. Time constant for the inventory rates of the HOR and ORR reactants. This is a numerical parameter, not a physical one. 1e-4 s seems to be a reasonable and robust value (for commit f5bd9dd3a28020d5d8582d593fc6e86fc5aa9dbf - 27th October 2026) (1e-2 seems not to be robust; 1e-8 seems to be robust as well) for the time constant of the inventory rates, which is much smaller than the time constant of the electrochemical reactions (HOR and ORR) themselves. This ensures that the inventory rates respond quickly to changes in the reactant concentrations, allowing for accurate modeling of the electrochemical reactions.
     inventory_order::Float64 = 2.0
     exponent_limit::Float64 = 80.0
     roughness_a::Float64 = 66.0
