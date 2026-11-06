@@ -159,6 +159,9 @@ Uses the source model's liquid-water activity of one and proton reference.
 The HOR entropy is per mol H2 oxidized and the ORR entropy is per mol H2O
 formed (Vetter and Schumacher, Eq. 5): both thermochemical extents use 2F.
 O2 consumption and its gas-activity term still use the four-electron basis.
+COR stores reduction entropies, but its currents are oxidation-positive:
+its reversible entropy heat is +j*T*delta_s_red/(n*F*H). The activity heat
+is +j*R*T*log(a_CO2)/(n*F*H); activation heat is j*(phi-E_red)/H.
 Joule and sorption heat remain separate transport-model contributions. Direct
 Pt-oxide heat is excluded, matching Python's unspecified oxide thermochemistry;
 the coverage-dependent gas reaction currents still enter all heat terms.
@@ -181,7 +184,7 @@ function reaction_heat(s::ElectrodeState, e::ElectrodeReactions, p::ReactionPara
     if e.cor !== nothing
         s.C_CO2 == e.cor.noncat.concentration || throw(ArgumentError("CO₂ state differs from evaluated COR"))
         for (r,n,ds) in ((e.cor.noncat,4,p.delta_s_cor_noncat),(e.cor.cat,3,p.delta_s_cor_cat))
-            entropy += -r.current*s.T*ds/(n*F*s.thickness)
+            entropy += r.current*s.T*ds/(n*F*s.thickness)
             nernst += r.current*R*s.T*log(gas_pressure(s.C_CO2,s.T,p)/Pref_eq)/(n*F*s.thickness)
             activation += r.current*r.overpotential/s.thickness
         end

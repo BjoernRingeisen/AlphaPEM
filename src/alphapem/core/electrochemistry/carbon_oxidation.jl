@@ -1,4 +1,9 @@
-"""Reduction potential of COR vs SHE, including the CO₂ gas activity."""
+"""Reduction potential of COR vs SHE, including the CO₂ gas activity.
+
+Both delta_h_cor_* and delta_s_cor_* describe the reduction direction,
+per mol CO2 reduced / C formed (n=4 direct, n=3 PtOH-catalyzed).
+COR kinetics run in the opposite direction with oxidation-positive current.
+"""
 function reversible_cor_potential(c::Real, T::Real, p::ReactionParams; catalyzed::Bool=false)
     validate_reaction_parameters(p)
     T > 0 && isfinite(T) && isfinite(c) || throw(ArgumentError("Invalid COR Nernst inputs"))

@@ -65,11 +65,12 @@ Base.@kwdef struct ReactionParams
     Eact_cor_cat::Float64 = 76700.0
     alpha_z_cor_noncat::Float64 = 0.90
     alpha_z_cor_cat::Float64 = 0.52
-    # Source-model thermochemical parameters per mol C oxidized / CO2 formed.
-    # Noncat: C + 2H2O -> CO2 + 4H+ + 4e- (4F per mol C).
-    # Cat: C + PtOH + H2O -> CO2 + Pt + 3H+ + 3e- (3F per mol C).
+    # Reduction thermochemistry per mol CO2 reduced / C formed.
+    # Noncat: CO2 + 4H+ + 4e- -> C + 2H2O (4F per mol C).
+    # Cat: CO2 + Pt + 3H+ + 3e- -> C + PtOH + H2O (3F per mol C).
     # Enthalpies: J/mol C; entropies below: J/(mol C K). The source-model
     # absolute-potential convention is converted with SHE_absolute_potential.
+    # Reversible areal heat for oxidation-positive current is +j*T*delta_s_red/(nF).
     delta_h_cor_noncat::Float64 = -5837890.0
     delta_h_cor_cat::Float64 = -4304790.0
     delta_s_cor_noncat::Float64 = -329.26
