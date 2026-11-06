@@ -156,6 +156,9 @@ end
 """Volumetric entropy, gas-activity and activation heat for one CL (W/m³).
 
 Uses the source model's liquid-water activity of one and proton reference.
+The HOR entropy is per mol H2 oxidized and the ORR entropy is per mol H2O
+formed (Vetter and Schumacher, Eq. 5): both thermochemical extents use 2F.
+O2 consumption and its gas-activity term still use the four-electron basis.
 Joule and sorption heat remain separate transport-model contributions. Direct
 Pt-oxide heat is excluded, matching Python's unspecified oxide thermochemistry;
 the coverage-dependent gas reaction currents still enter all heat terms.
@@ -170,7 +173,7 @@ function reaction_heat(s::ElectrodeState, e::ElectrodeReactions, p::ReactionPara
         throw(ArgumentError("Heat must use the Pt concentration of the evaluated reaction"))
     s.C_H2 == e.hor.concentration || throw(ArgumentError("Hydrogen state differs from evaluated reaction"))
     jh, jo = e.hor.current, e.orr.current
-    entropy = s.T / (F * s.thickness) * (-jh * delta_s_HOR / 2 - jo * delta_s_ORR / 4)
+    entropy = s.T / (2F * s.thickness) * (-jh * delta_s_HOR - jo * delta_s_ORR)
     logH2 = -log(gas_pressure(s.C_H2, s.T, p) / Pref_eq)
     logO2 = -log(gas_pressure(C_O2_Pt, s.T, p) / Pref_eq)
     nernst = R * s.T / (F * s.thickness) * (jh * logH2 / 2 + jo * logO2 / 4)

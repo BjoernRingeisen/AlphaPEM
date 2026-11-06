@@ -1,6 +1,8 @@
 using AlphaPEM
 using Test
 
+include("reaction_heat.jl")
+
 # Helper: minimal numerical parameters for fast smoke tests.
 function quick_numerical_params()
     return AlphaPEM.Config.NumericalParams(

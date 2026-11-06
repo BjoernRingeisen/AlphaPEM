@@ -25,3 +25,4 @@ __pycache__/
 *.egg-info
 *.junie
 .claude
+docs/reaction_heat_thermochemistry.md
