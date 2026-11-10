@@ -72,3 +72,24 @@ function calculate_cell_voltage(i_fc::Real, C_O2_Pt::Real, sv::CellState1D, fc::
 
     return Ucell
 end
+
+"""Cell voltage obtained from the two local electrode-potential states.
+
+The potential difference supplies the electrochemical voltage. The external
+terminal voltage additionally includes the same membrane, CCL protonic and
+electronic losses used by the legacy closure.
+"""
+function calculate_cell_voltage_from_potentials(i_fc::Real, sv::CellState1D,
+                                                fc::AbstractFuelCell)
+    pp = fc.physical_parameters
+    T_mem = _positive_temperature_value(sv.mem.T)
+    T_ccl = _positive_temperature_value(sv.ccl.T)
+    lambda_mem, lambda_ccl = sv.mem.lambda, sv.ccl.lambda
+
+    Rmem = pp.Hmem / sigma_p_eff(:mem, lambda_mem, T_mem, nothing, pp)
+    Rccl = pp.Hccl / (3 * sigma_p_eff(:ccl, lambda_ccl, T_ccl, pp.Hccl, pp))
+    # Use the local segment current for ohmic losses, matching the physical
+    # baseline's legacy voltage closure. Crossover remains in species transport
+    # and electrode-potential dynamics; it is not added to the ohmic current.
+    return sv.ccl.phi_c - sv.acl.phi_a - i_fc * (Rmem + Rccl + pp.Re)
+end

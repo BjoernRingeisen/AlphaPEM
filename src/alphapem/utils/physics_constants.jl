@@ -34,8 +34,10 @@ const Tref_O2_red::Float64 = 323               # K. It is the reference temperat
 
 # Model parameters for the heat transfer calculation
 #   Molar entropy of reactions
-const delta_s_HOR::Float64 = 0.104             # J.mol-1.K-1. It is the HOR molar reaction entropy [vetterFreeOpenReference2019].
-const delta_s_ORR::Float64 = -163.3            # J.mol-1.K-1. It is the ORR molar reaction entropy [vetterFreeOpenReference2019].
+# Vetter and Schumacher (2019), Eq. (5) and Sec. 3.2: both entropies use
+# a two-electron extent. ORR gas stoichiometry separately uses 4 e- per O2.
+const delta_s_HOR::Float64 = 0.104             # J/(mol H2 oxidized K): H2 -> 2H+ + 2e-.
+const delta_s_ORR::Float64 = -163.3            # J/(mol H2O formed K): 1/2 O2 + 2H+ + 2e- -> H2O(l).
 
 # Model parameters for the balance of plant
 const i_min_inlet_flows::Float64 = 0.5e4       # A.m-2. Minimum current density at which inlet mass flows are regulated to supply reactant flow.
@@ -44,3 +46,5 @@ const tau_hum::Float64     = 5                 # s. It is the humidifier time co
 const Kp_T::Float64        = 5e-8              # m².s-1.Pa-1. It is the proportional constant of the PD controller at the back pressure valve.
 const Kd_T::Float64        = 1e-8              # m².Pa-1. It is the derivative constant of the PD controller at the back pressure valve.
 
+
+const M_CO2::Float64 = 0.04401 # kg/mol

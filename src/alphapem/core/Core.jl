@@ -8,18 +8,20 @@ PEMFC physics and simulation behavior.
 
 Modules:
     - Types:   Pure data types (structs) — loaded first, no dependencies
+    - Electrochemistry: Local reaction kernels using Config, Utils and Types
     - Models:  Core domain models (main `AlphaPEM` fuel cell model)
     - Modules: Physics kernels (flows, heat transfer, voltage, ODE helpers, display)
 """
 module Core
 
 include("types/Types.jl")    # ① types first — no deps
+include("electrochemistry/Electrochemistry.jl")
 include("models/Models.jl")  # ② models depend on Types
 include("modules/Modules.jl")
 
 using .Models: AlphaPEM
 
-export Types, Models, Modules, AlphaPEM
+export Types, Models, Modules, AlphaPEM, Electrochemistry
 
 end  # module Core
 

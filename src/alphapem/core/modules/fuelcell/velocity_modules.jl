@@ -43,49 +43,55 @@ function calculate_velocity_int_values!(work::GCManifoldWorkspace,
     @inbounds for i in 1:nb_gc # In the anode
         # Extract the AGC state variables
         sv_i = sv[i]
+        C_O2_agc = sv_i.agc.C_O2
         C_v_agc, C_H2_agc, C_N2_agc, T_agc = sv_i.agc.C_v, sv_i.agc.C_H2, sv_i.agc.C_N2, sv_i.agc.T
 
         # Calculate the AGC pressure
-        C_tot_agc     = C_v_agc + C_H2_agc + C_N2_agc
+        C_tot_agc     = C_v_agc + C_H2_agc + C_N2_agc + C_O2_agc + sv_i.agc.C_CO2
         P_agc         = C_tot_agc * R * T_agc
         work.P_agc[i] = P_agc
 
         # Calculate the mole fractions and viscosities
         x_H2O_v_agc, x_H2_agc, x_N2_agc = C_v_agc  / C_tot_agc, C_H2_agc / C_tot_agc, C_N2_agc / C_tot_agc
         work.x_H2O_v_agc[i], work.x_H2_agc[i], work.x_N2_agc[i] = x_H2O_v_agc, x_H2_agc, x_N2_agc
-        work.mu_gaz_agc[i]  = mu_mixture_gases(:H2O_v, x_H2O_v_agc, :H2, x_H2_agc, :N2, x_N2_agc, T_agc)
+        work.mu_gaz_agc[i]  = mu_mixture_gases(:H2O_v, x_H2O_v_agc, :H2, x_H2_agc, :N2, x_N2_agc, :O2, C_O2_agc/C_tot_agc, :CO2,sv_i.agc.C_CO2/C_tot_agc, T_agc)
 
         # Calculate the total molar concentration at the AGDL/AGC interface and the net molar flux from AGC to AGDL
         C_v_agdl_1, C_H2_agdl_1, C_N2_agdl_1 = sv_i.agdl[1].C_v, sv_i.agdl[1].C_H2, sv_i.agdl[1].C_N2
+        C_O2_agdl_1 = sv_i.agdl[1].C_O2
         h_agc                    = h_a(P_agc, T_des, Wagc, Hagc)
-        work.C_tot_agdl[i]       = C_v_agdl_1 + C_H2_agdl_1 + C_N2_agdl_1
+        work.C_tot_agdl[i]       = C_v_agdl_1 + C_H2_agdl_1 + C_N2_agdl_1 + C_O2_agdl_1 + sv_i.agdl[1].C_CO2
         work.J_tot_agc_agdl[i]   = h_agc * (C_v_agc - C_v_agdl_1) +
                                    h_agc * (C_H2_agc - C_H2_agdl_1) +
-                                   h_agc * (C_N2_agc - C_N2_agdl_1)
+                                   h_agc * (C_N2_agc - C_N2_agdl_1) +
+                                   h_agc * (C_O2_agc - C_O2_agdl_1) + h_agc*(sv_i.agc.C_CO2-sv_i.agdl[1].C_CO2)
     end
 
     @inbounds for i in 1:nb_gc # In the cathode
         # Extract the CGC state variables
         sv_i   = sv[i]
+        C_H2_cgc = sv_i.cgc.C_H2
         C_v_cgc, C_O2_cgc, C_N2_cgc, T_cgc = sv_i.cgc.C_v, sv_i.cgc.C_O2, sv_i.cgc.C_N2, sv_i.cgc.T
 
         # Calculate the CGC pressure
-        C_tot_cgc     = C_v_cgc + C_O2_cgc + C_N2_cgc
+        C_tot_cgc     = C_v_cgc + C_O2_cgc + C_N2_cgc + C_H2_cgc + sv_i.cgc.C_CO2
         P_cgc         = C_tot_cgc * R * T_cgc
         work.P_cgc[i] = P_cgc
 
         # Calculate the mole fractions and viscosities
         x_H2O_v_cgc, x_O2_cgc, x_N2_cgc = C_v_cgc / C_tot_cgc, C_O2_cgc / C_tot_cgc, C_N2_cgc / C_tot_cgc
         work.x_H2O_v_cgc[i], work.x_O2_cgc[i], work.x_N2_cgc[i] = x_H2O_v_cgc, x_O2_cgc, x_N2_cgc
-        work.mu_gaz_cgc[i]  = mu_mixture_gases(:H2O_v, x_H2O_v_cgc, :O2, x_O2_cgc, :N2, x_N2_cgc, T_cgc)
+        work.mu_gaz_cgc[i]  = mu_mixture_gases(:H2O_v, x_H2O_v_cgc, :O2, x_O2_cgc, :N2, x_N2_cgc, :H2, C_H2_cgc/C_tot_cgc, :CO2,sv_i.cgc.C_CO2/C_tot_cgc, T_cgc)
 
         # Calculate the total molar concentration at the CGDL/CGC interface and the net molar flux from CGDL to CGC
         C_v_cgdl_last, C_O2_cgdl_last, C_N2_cgdl_last = sv_i.cgdl[nb_gdl].C_v, sv_i.cgdl[nb_gdl].C_O2, sv_i.cgdl[nb_gdl].C_N2
+        C_H2_cgdl_last = sv_i.cgdl[nb_gdl].C_H2
         h_cgc                          = h_c(P_cgc, T_des, Wcgc, Hcgc)
-        work.C_tot_cgdl[i]             = C_v_cgdl_last + C_O2_cgdl_last + C_N2_cgdl_last
+        work.C_tot_cgdl[i]             = C_v_cgdl_last + C_O2_cgdl_last + C_N2_cgdl_last + C_H2_cgdl_last + sv_i.cgdl[nb_gdl].C_CO2
         work.J_tot_cgdl_cgc[i]         = h_cgc * (C_v_cgdl_last - C_v_cgc) +
                                          h_cgc * (C_O2_cgdl_last - C_O2_cgc) +
-                                         h_cgc * (C_N2_cgdl_last - C_N2_cgc)
+                                         h_cgc * (C_N2_cgdl_last - C_N2_cgc) +
+                                   h_cgc * (C_H2_cgdl_last - C_H2_cgc) + h_cgc*(sv_i.cgdl[nb_gdl].C_CO2-sv_i.cgc.C_CO2)
     end
 
     return nothing

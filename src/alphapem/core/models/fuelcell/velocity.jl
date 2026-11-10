@@ -164,6 +164,10 @@ end
 
 Calculate the desired flow for the air compressor and the humidifiers.
 
+When both fixed dry-feed rates are configured, return those whole-stack molar
+flows independently of current, stoichiometry and crossover, and add vapor
+using the prescribed inlet humidity and computed inlet pressure.
+
 Parameters
 ----------
 solver_variables : AbstractVector{<:CellState1D}
@@ -200,6 +204,18 @@ DesiredInletFlows
     kappa_co = pp.kappa_co
     nb_gc, nb_cell = np.nb_gc, pp.nb_cell
     i_min_stoich = oc.i_min_stoich * 1e4  # Conversion from A.cm-2 to A.m-2, to match i_fc_cell's unit.
+
+    if oc.anode_dry_flow_mol_s !== nothing
+        cfg.type_auxiliary == :no_auxiliary ||
+            throw(ArgumentError("Fixed dry feed rates require no_auxiliary."))
+        Wa = oc.anode_dry_flow_mol_s
+        Wc = oc.cathode_dry_flow_mol_s
+        Wc === nothing && throw(ArgumentError("Both fixed dry feed rates are required."))
+        pva, pvc = Phi_a_des * Psat(T_des), Phi_c_des * Psat(T_des)
+        Pa_in > pva && Pc_in > pvc ||
+            throw(ArgumentError("Inlet pressure must exceed prescribed water-vapor partial pressure."))
+        return DesiredInletFlows(Wa, Wc, pva / (Pa_in-pva) * Wa, pvc / (Pc_in-pvc) * Wc)
+    end
 
     # Physical quantities inside the stack
     #       The crossover current density i_n
@@ -258,8 +274,16 @@ DesiredInletFlows
         # inlet-flow residuals and the CL/membrane state, causing severe solver slowdowns.
         i_eff = effective_stoich_current(i_fc_cell, i_min_stoich) + max_i_n
 
-        # At the anode side
-        W_H2_des        = 1 / y_H2_in * Sa * i_eff / (2 * F) * (nb_cell * Aact)
+        # At the anode side. During air/air startup, the historical `H2` field
+        # carries the total dry-anode-feed flow; the species split is applied
+        # later from the configured inlet fractions.
+        W_H2_des = if oc.anode_flow_mode == :equivalent_air
+            1 / y_O2_ext * Sa * i_eff / (4 * F) * (nb_cell * Aact)
+        elseif y_H2_in > 0
+            1 / y_H2_in * Sa * i_eff / (2 * F) * (nb_cell * Aact)
+        else
+            1 / oc.y_O2_anode_in * Sa * i_eff / (4 * F) * (nb_cell * Aact)
+        end
         W_H2O_inj_a_des = (Phi_a_des * Psat(T_des) / (Pa_in - Phi_a_des * Psat(T_des))) * W_H2_des
 
         # At the cathode side

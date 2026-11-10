@@ -9,6 +9,7 @@ Types:
 module Models
 
 using DifferentialEquations
+using Sundials: IDASetConstraints, NVector
 using CairoMakie
 using NaNMath    # NaNMath avoids hard DomainError on rare non-physical transients (log argument <= 0).
 using ...Utils   # AlphaPEM.Utils: constants + maths/physics functions
@@ -17,6 +18,10 @@ using ...Config: SimulationConfig, StepParams, PolarizationParams, PolarizationC
 using ...Fuelcell: AbstractFuelCell
 using ...Currents: AbstractCurrent, current, solver_tstops, solver_dtmax
 using ..Types    # AlphaPEM.Core.Types: all domain structs (cell_state, cell_derivative, …)
+using ..Electrochemistry: ElectrodeState, stationary_potential, multireaction,
+                          potential_derivatives, reaction_sources, reaction_heat,
+                          PtCoverage, initialize_pt_electrode, valid_pt_coverage,
+                          pt_bulk_capacity, resolve_pt_oxygen, electrode_reactions
 
 # Explicit aliases for utility constants that may clash with Base exports.
 const Text = Utils.Text

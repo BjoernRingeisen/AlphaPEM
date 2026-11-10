@@ -40,9 +40,11 @@ The coupled DAE Jacobian includes cj*dF/d(du). Both the WRMS nonlinear budget
 and a unit component budget must hold. No predicted phase-sign veto is used.
 The estimate is never applied to the integrated state.
 """
-function _build_newton_verifier(residual!, packed, prototype, differential_vars)
+function _build_newton_verifier(residual!, packed, prototype, differential_vars;
+        nonnegative_indices=Int[],local_step_indices=Int[])
     J = copy(prototype)
-    cache = _build_jacobian_coloring_cache(prototype, differential_vars)
+    cache = _build_jacobian_coloring_cache(prototype,differential_vars;
+        nonnegative_indices=nonnegative_indices,local_step_indices=local_step_indices)
     res = Vector{Float64}(undef, size(J, 1))
     return function (y, dy, cj, t, weights, tolerance)
         all(isfinite, y) && all(isfinite, dy) &&

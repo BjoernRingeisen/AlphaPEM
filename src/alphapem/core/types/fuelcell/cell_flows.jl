@@ -27,9 +27,13 @@ mutable struct MEAFlowsWorkspace
     J_O2_cmpl_cmpl::Vector{Float64}
     J_O2_cgdl_cgdl::Vector{Float64}
     J_N2_agdl_agdl::Vector{Float64}
+    J_O2_agdl_agdl::Vector{Float64}
     J_N2_ampl_ampl::Vector{Float64}
+    J_O2_ampl_ampl::Vector{Float64}
     J_N2_cmpl_cmpl::Vector{Float64}
+    J_H2_cmpl_cmpl::Vector{Float64}
     J_N2_cgdl_cgdl::Vector{Float64}
+    J_H2_cgdl_cgdl::Vector{Float64}
     Sl_agdl::Vector{Float64}
     Sl_ampl::Vector{Float64}
     Sl_cmpl::Vector{Float64}
@@ -38,22 +42,46 @@ mutable struct MEAFlowsWorkspace
     Sv_ampl::Vector{Float64}
     Sv_cmpl::Vector{Float64}
     Sv_cgdl::Vector{Float64}
+    J_CO2_agdl_agdl::Vector{Float64}
+    J_CO2_ampl_ampl::Vector{Float64}
+    J_CO2_cmpl_cmpl::Vector{Float64}
+    J_CO2_cgdl_cgdl::Vector{Float64}
 end
 
 function MEAFlowsWorkspace(nb_gdl::Int, nb_mpl::Int)
     return MEAFlowsWorkspace(
-        Vector{Float64}(undef, max(nb_gdl - 1, 0)), Vector{Float64}(undef, max(nb_mpl - 1, 0)),
-        Vector{Float64}(undef, max(nb_mpl - 1, 0)), Vector{Float64}(undef, max(nb_gdl - 1, 0)),
-        Vector{Float64}(undef, max(nb_gdl - 1, 0)), Vector{Float64}(undef, max(nb_mpl - 1, 0)),
-        Vector{Float64}(undef, max(nb_mpl - 1, 0)), Vector{Float64}(undef, max(nb_gdl - 1, 0)),
-        Vector{Float64}(undef, max(nb_gdl - 1, 0)), Vector{Float64}(undef, max(nb_mpl - 1, 0)),
-        Vector{Float64}(undef, max(nb_mpl - 1, 0)), Vector{Float64}(undef, max(nb_gdl - 1, 0)),
-        Vector{Float64}(undef, max(nb_gdl - 1, 0)), Vector{Float64}(undef, max(nb_mpl - 1, 0)),
-        Vector{Float64}(undef, max(nb_mpl - 1, 0)), Vector{Float64}(undef, max(nb_gdl - 1, 0)),
-        Vector{Float64}(undef, nb_gdl), Vector{Float64}(undef, nb_mpl),
-        Vector{Float64}(undef, nb_mpl), Vector{Float64}(undef, nb_gdl),
-        Vector{Float64}(undef, nb_gdl), Vector{Float64}(undef, nb_mpl),
-        Vector{Float64}(undef, nb_mpl), Vector{Float64}(undef, nb_gdl)
+        Vector{Float64}(undef, max(nb_gdl - 1, 0)),
+        Vector{Float64}(undef, max(nb_mpl - 1, 0)),
+        Vector{Float64}(undef, max(nb_mpl - 1, 0)),
+        Vector{Float64}(undef, max(nb_gdl - 1, 0)),
+        Vector{Float64}(undef, max(nb_gdl - 1, 0)),
+        Vector{Float64}(undef, max(nb_mpl - 1, 0)),
+        Vector{Float64}(undef, max(nb_mpl - 1, 0)),
+        Vector{Float64}(undef, max(nb_gdl - 1, 0)),
+        Vector{Float64}(undef, max(nb_gdl - 1, 0)),
+        Vector{Float64}(undef, max(nb_mpl - 1, 0)),
+        Vector{Float64}(undef, max(nb_mpl - 1, 0)),
+        Vector{Float64}(undef, max(nb_gdl - 1, 0)),
+        Vector{Float64}(undef, max(nb_gdl - 1, 0)),
+        Vector{Float64}(undef, max(nb_gdl - 1, 0)),
+        Vector{Float64}(undef, max(nb_mpl - 1, 0)),
+        Vector{Float64}(undef, max(nb_mpl - 1, 0)),
+        Vector{Float64}(undef, max(nb_mpl - 1, 0)),
+        Vector{Float64}(undef, max(nb_mpl - 1, 0)),
+        Vector{Float64}(undef, max(nb_gdl - 1, 0)),
+        Vector{Float64}(undef, max(nb_gdl - 1, 0)),
+        Vector{Float64}(undef, nb_gdl),
+        Vector{Float64}(undef, nb_mpl),
+        Vector{Float64}(undef, nb_mpl),
+        Vector{Float64}(undef, nb_gdl),
+        Vector{Float64}(undef, nb_gdl),
+        Vector{Float64}(undef, nb_mpl),
+        Vector{Float64}(undef, nb_mpl),
+        Vector{Float64}(undef, nb_gdl),
+        Vector{Float64}(undef, max(nb_gdl - 1, 0)),
+        Vector{Float64}(undef, max(nb_mpl - 1, 0)),
+        Vector{Float64}(undef, max(nb_mpl - 1, 0)),
+        Vector{Float64}(undef, max(nb_gdl - 1, 0))
     )
 end
 
@@ -72,13 +100,17 @@ mutable struct GCManifoldFlowsWorkspace
     J_H2_agc_agc    :: Vector{Float64}
     J_O2_cgc_cgc    :: Vector{Float64}
     J_N2_agc_agc    :: Vector{Float64}
+    J_O2_agc_agc    :: Vector{Float64}
     J_N2_cgc_cgc    :: Vector{Float64}
+    J_H2_cgc_cgc    :: Vector{Float64}
+    J_CO2_agc_agc::Vector{Float64}
+    J_CO2_cgc_cgc::Vector{Float64}
 end
 
 function GCManifoldFlowsWorkspace(nb_gc::Int)
     zn = () -> Vector{Float64}(undef, max(nb_gc, 0))
     return GCManifoldFlowsWorkspace(zn(), zn(), zn(), zn(), zn(), zn(),
-                                    zn(), zn(), zn(), zn(), zn(), zn())
+                                    zn(), zn(), zn(), zn(), zn(), zn(), zn(), zn(), zn(), zn())
 end
 
 """Reusable vector workspace for `calculate_heat_transfers!`."""
@@ -234,29 +266,14 @@ struct MEAVaporFluxes{NB_GDL, NB_MPL} # Jv
     end
 end
 
-"""Hydrogen inter-layer fluxes (anode side only). Units: mol·m⁻²·s⁻¹
+"""Hydrogen inter-layer fluxes (both electrodes). Units: mol·m⁻²·s⁻¹
 """
 struct MEAHydrogenFluxes{NB_GDL, NB_MPL} # J_H2
     agc_agdl  :: Float64
-    agdl_agdl :: Vector{Float64}
+    agdl_agdl :: Vector{Float64}   # nb_gdl - 1 inter-node flows
     agdl_ampl :: Float64
-    ampl_ampl :: Vector{Float64}
+    ampl_ampl :: Vector{Float64}   # nb_mpl - 1 inter-node flows
     ampl_acl  :: Float64
-
-    # Constructor checks mesh-size invariants for inter-node arrays (NB_* - 1).
-    # Inputs are normalized to Vector{Float64} for predictable downstream typing.
-    function MEAHydrogenFluxes{NB_GDL, NB_MPL}(agc_agdl, agdl_agdl, agdl_ampl,
-                                               ampl_ampl, ampl_acl) where {NB_GDL, NB_MPL}
-        length(agdl_agdl) == NB_GDL - 1 || throw(ArgumentError("agdl_agdl length must be NB_GDL - 1."))
-        length(ampl_ampl) == NB_MPL - 1 || throw(ArgumentError("ampl_ampl length must be NB_MPL - 1."))
-        return new{NB_GDL, NB_MPL}(agc_agdl, _as_f64_vec(agdl_agdl), agdl_ampl,
-                                   _as_f64_vec(ampl_ampl), ampl_acl)
-    end
-end
-
-"""Oxygen inter-layer fluxes (cathode side only). Units: mol·m⁻²·s⁻¹
-"""
-struct MEAOxygenFluxes{NB_GDL, NB_MPL} # J_O2
     ccl_cmpl  :: Float64
     cmpl_cmpl :: Vector{Float64}
     cmpl_cgdl :: Float64
@@ -265,11 +282,46 @@ struct MEAOxygenFluxes{NB_GDL, NB_MPL} # J_O2
 
     # Constructor checks mesh-size invariants for inter-node arrays (NB_* - 1).
     # Inputs are normalized to Vector{Float64} for predictable downstream typing.
-    function MEAOxygenFluxes{NB_GDL, NB_MPL}(ccl_cmpl, cmpl_cmpl, cmpl_cgdl,
-                                             cgdl_cgdl, cgdl_cgc) where {NB_GDL, NB_MPL}
+    function MEAHydrogenFluxes{NB_GDL, NB_MPL}(agc_agdl, agdl_agdl, agdl_ampl, ampl_ampl,
+                                               ampl_acl, ccl_cmpl, cmpl_cmpl, cmpl_cgdl,
+                                               cgdl_cgdl, cgdl_cgc) where {NB_GDL, NB_MPL}
+        length(agdl_agdl) == NB_GDL - 1 || throw(ArgumentError("agdl_agdl length must be NB_GDL - 1."))
+        length(ampl_ampl) == NB_MPL - 1 || throw(ArgumentError("ampl_ampl length must be NB_MPL - 1."))
         length(cmpl_cmpl) == NB_MPL - 1 || throw(ArgumentError("cmpl_cmpl length must be NB_MPL - 1."))
         length(cgdl_cgdl) == NB_GDL - 1 || throw(ArgumentError("cgdl_cgdl length must be NB_GDL - 1."))
-        return new{NB_GDL, NB_MPL}(ccl_cmpl, _as_f64_vec(cmpl_cmpl), cmpl_cgdl,
+        return new{NB_GDL, NB_MPL}(agc_agdl, _as_f64_vec(agdl_agdl), agdl_ampl,
+                                   _as_f64_vec(ampl_ampl), ampl_acl, ccl_cmpl,
+                                   _as_f64_vec(cmpl_cmpl), cmpl_cgdl,
+                                   _as_f64_vec(cgdl_cgdl), cgdl_cgc)
+    end
+end
+
+"""Oxygen inter-layer fluxes (both electrodes). Units: mol·m⁻²·s⁻¹
+"""
+struct MEAOxygenFluxes{NB_GDL, NB_MPL} # J_O2
+    agc_agdl  :: Float64
+    agdl_agdl :: Vector{Float64}   # nb_gdl - 1 inter-node flows
+    agdl_ampl :: Float64
+    ampl_ampl :: Vector{Float64}   # nb_mpl - 1 inter-node flows
+    ampl_acl  :: Float64
+    ccl_cmpl  :: Float64
+    cmpl_cmpl :: Vector{Float64}
+    cmpl_cgdl :: Float64
+    cgdl_cgdl :: Vector{Float64}
+    cgdl_cgc  :: Float64
+
+    # Constructor checks mesh-size invariants for inter-node arrays (NB_* - 1).
+    # Inputs are normalized to Vector{Float64} for predictable downstream typing.
+    function MEAOxygenFluxes{NB_GDL, NB_MPL}(agc_agdl, agdl_agdl, agdl_ampl, ampl_ampl,
+                                               ampl_acl, ccl_cmpl, cmpl_cmpl, cmpl_cgdl,
+                                               cgdl_cgdl, cgdl_cgc) where {NB_GDL, NB_MPL}
+        length(agdl_agdl) == NB_GDL - 1 || throw(ArgumentError("agdl_agdl length must be NB_GDL - 1."))
+        length(ampl_ampl) == NB_MPL - 1 || throw(ArgumentError("ampl_ampl length must be NB_MPL - 1."))
+        length(cmpl_cmpl) == NB_MPL - 1 || throw(ArgumentError("cmpl_cmpl length must be NB_MPL - 1."))
+        length(cgdl_cgdl) == NB_GDL - 1 || throw(ArgumentError("cgdl_cgdl length must be NB_GDL - 1."))
+        return new{NB_GDL, NB_MPL}(agc_agdl, _as_f64_vec(agdl_agdl), agdl_ampl,
+                                   _as_f64_vec(ampl_ampl), ampl_acl, ccl_cmpl,
+                                   _as_f64_vec(cmpl_cmpl), cmpl_cgdl,
                                    _as_f64_vec(cgdl_cgdl), cgdl_cgc)
     end
 end
@@ -291,6 +343,35 @@ struct MEANitrogenFluxes{NB_GDL, NB_MPL} # J_N2
     # Constructor checks mesh-size invariants for inter-node arrays (NB_* - 1).
     # Inputs are normalized to Vector{Float64} for predictable downstream typing.
     function MEANitrogenFluxes{NB_GDL, NB_MPL}(agc_agdl, agdl_agdl, agdl_ampl, ampl_ampl,
+                                               ampl_acl, ccl_cmpl, cmpl_cmpl, cmpl_cgdl,
+                                               cgdl_cgdl, cgdl_cgc) where {NB_GDL, NB_MPL}
+        length(agdl_agdl) == NB_GDL - 1 || throw(ArgumentError("agdl_agdl length must be NB_GDL - 1."))
+        length(ampl_ampl) == NB_MPL - 1 || throw(ArgumentError("ampl_ampl length must be NB_MPL - 1."))
+        length(cmpl_cmpl) == NB_MPL - 1 || throw(ArgumentError("cmpl_cmpl length must be NB_MPL - 1."))
+        length(cgdl_cgdl) == NB_GDL - 1 || throw(ArgumentError("cgdl_cgdl length must be NB_GDL - 1."))
+        return new{NB_GDL, NB_MPL}(agc_agdl, _as_f64_vec(agdl_agdl), agdl_ampl,
+                                   _as_f64_vec(ampl_ampl), ampl_acl, ccl_cmpl,
+                                   _as_f64_vec(cmpl_cmpl), cmpl_cgdl,
+                                   _as_f64_vec(cgdl_cgdl), cgdl_cgc)
+    end
+end
+
+"""CO₂ fluxes on both electrode sides."""
+struct MEACarbonDioxideFluxes{NB_GDL, NB_MPL} # J_CO2
+    agc_agdl  :: Float64
+    agdl_agdl :: Vector{Float64}   # nb_gdl - 1 inter-node flows
+    agdl_ampl :: Float64
+    ampl_ampl :: Vector{Float64}   # nb_mpl - 1 inter-node flows
+    ampl_acl  :: Float64
+    ccl_cmpl  :: Float64
+    cmpl_cmpl :: Vector{Float64}
+    cmpl_cgdl :: Float64
+    cgdl_cgdl :: Vector{Float64}
+    cgdl_cgc  :: Float64
+
+    # Constructor checks mesh-size invariants for inter-node arrays (NB_* - 1).
+    # Inputs are normalized to Vector{Float64} for predictable downstream typing.
+    function MEACarbonDioxideFluxes{NB_GDL, NB_MPL}(agc_agdl, agdl_agdl, agdl_ampl, ampl_ampl,
                                                ampl_acl, ccl_cmpl, cmpl_cmpl, cmpl_cgdl,
                                                cgdl_cgdl, cgdl_cgc) where {NB_GDL, NB_MPL}
         length(agdl_agdl) == NB_GDL - 1 || throw(ArgumentError("agdl_agdl length must be NB_GDL - 1."))
@@ -455,12 +536,18 @@ Field agc_agc is the inter-node flux vector of length NB_GC - 1.
 """
 struct GCHydrogenFlows{NB_GC}
     agc_in  :: Float64          # Inlet H₂ flux at the anode GC entry
-    agc_agc :: Vector{Float64}  # Along-channel inter-node H₂ fluxes (length NB_GC - 1)
+    agc_agc :: Vector{Float64}  # Along-channel inter-node H₂ fluxes at anode (length NB_GC - 1)
     agc_out :: Float64          # Outlet H₂ flux at the anode GC exit
+    cgc_in  :: Float64          # Inlet H₂ flux at the cathode GC entry
+    cgc_cgc :: Vector{Float64}  # Along-channel inter-node H₂ fluxes at cathode (length NB_GC - 1)
+    cgc_out :: Float64          # Outlet H₂ flux at the cathode GC exit
 
-    function GCHydrogenFlows{NB_GC}(agc_in, agc_agc, agc_out) where {NB_GC}
+    function GCHydrogenFlows{NB_GC}(agc_in, agc_agc, agc_out,
+                                     cgc_in, cgc_cgc, cgc_out) where {NB_GC}
         length(agc_agc) == NB_GC || throw(ArgumentError("agc_agc length must be NB_GC = $(NB_GC)."))
-        return new{NB_GC}(Float64(agc_in), _as_f64_vec(agc_agc), Float64(agc_out))
+        length(cgc_cgc) == NB_GC || throw(ArgumentError("cgc_cgc length must be NB_GC = $(NB_GC)."))
+        return new{NB_GC}(Float64(agc_in), _as_f64_vec(agc_agc), Float64(agc_out),
+                          Float64(cgc_in), _as_f64_vec(cgc_cgc), Float64(cgc_out))
     end
 end
 
@@ -469,13 +556,19 @@ end
 Field cgc_cgc is the inter-node flux vector of length NB_GC - 1.
 """
 struct GCOxygenFlows{NB_GC}
+    agc_in  :: Float64          # Inlet O₂ flux at the anode GC entry
+    agc_agc :: Vector{Float64}  # Along-channel inter-node O₂ fluxes at anode (length NB_GC - 1)
+    agc_out :: Float64          # Outlet O₂ flux at the anode GC exit
     cgc_in  :: Float64          # Inlet O₂ flux at the cathode GC entry
-    cgc_cgc :: Vector{Float64}  # Along-channel inter-node O₂ fluxes (length NB_GC - 1)
+    cgc_cgc :: Vector{Float64}  # Along-channel inter-node O₂ fluxes at cathode (length NB_GC - 1)
     cgc_out :: Float64          # Outlet O₂ flux at the cathode GC exit
 
-    function GCOxygenFlows{NB_GC}(cgc_in, cgc_cgc, cgc_out) where {NB_GC}
+    function GCOxygenFlows{NB_GC}(agc_in, agc_agc, agc_out,
+                                     cgc_in, cgc_cgc, cgc_out) where {NB_GC}
+        length(agc_agc) == NB_GC || throw(ArgumentError("agc_agc length must be NB_GC = $(NB_GC)."))
         length(cgc_cgc) == NB_GC || throw(ArgumentError("cgc_cgc length must be NB_GC = $(NB_GC)."))
-        return new{NB_GC}(Float64(cgc_in), _as_f64_vec(cgc_cgc), Float64(cgc_out))
+        return new{NB_GC}(Float64(agc_in), _as_f64_vec(agc_agc), Float64(agc_out),
+                          Float64(cgc_in), _as_f64_vec(cgc_cgc), Float64(cgc_out))
     end
 end
 
@@ -492,6 +585,24 @@ struct GCNitrogenFlows{NB_GC}
     cgc_out :: Float64          # Outlet N₂ flux at the cathode GC exit
 
     function GCNitrogenFlows{NB_GC}(agc_in, agc_agc, agc_out,
+                                     cgc_in, cgc_cgc, cgc_out) where {NB_GC}
+        length(agc_agc) == NB_GC || throw(ArgumentError("agc_agc length must be NB_GC = $(NB_GC)."))
+        length(cgc_cgc) == NB_GC || throw(ArgumentError("cgc_cgc length must be NB_GC = $(NB_GC)."))
+        return new{NB_GC}(Float64(agc_in), _as_f64_vec(agc_agc), Float64(agc_out),
+                          Float64(cgc_in), _as_f64_vec(cgc_cgc), Float64(cgc_out))
+    end
+end
+
+"""CO₂ fluxes on both electrode sides."""
+struct GCCarbonDioxideFlows{NB_GC}
+    agc_in  :: Float64          # Inlet CO₂ flux at the anode GC entry
+    agc_agc :: Vector{Float64}  # CO₂ flux leaving each anode node (length NB_GC)
+    agc_out :: Float64          # Outlet CO₂ flux at the anode GC exit
+    cgc_in  :: Float64          # Inlet CO₂ flux at the cathode GC entry
+    cgc_cgc :: Vector{Float64}  # CO₂ flux leaving each cathode node (length NB_GC)
+    cgc_out :: Float64          # Outlet CO₂ flux at the cathode GC exit
+
+    function GCCarbonDioxideFlows{NB_GC}(agc_in, agc_agc, agc_out,
                                      cgc_in, cgc_cgc, cgc_out) where {NB_GC}
         length(agc_agc) == NB_GC || throw(ArgumentError("agc_agc length must be NB_GC = $(NB_GC)."))
         length(cgc_cgc) == NB_GC || throw(ArgumentError("cgc_cgc length must be NB_GC = $(NB_GC)."))
@@ -527,6 +638,7 @@ struct GCManifoldFlows1D{NB_GC}
     J_O2 :: GCOxygenFlows{NB_GC}
     J_N2 :: GCNitrogenFlows{NB_GC}
     W    :: GCMassFlows
+    J_CO2::GCCarbonDioxideFlows{NB_GC}
 end
 
 """Complete 1D MEA flow output for one gas-channel column.
@@ -545,6 +657,7 @@ struct MEAFlows1D{NB_GDL, NB_MPL}
     S_O2     :: MEAGasReactionSources
     Sv       :: MEAVaporSources{NB_GDL, NB_MPL}
     Sl       :: MEALiquidSources{NB_GDL, NB_MPL}
+    J_CO2::MEACarbonDioxideFluxes{NB_GDL, NB_MPL}
 end
 
 """Complete 1D MEA heat transfer output for one gas-channel column.

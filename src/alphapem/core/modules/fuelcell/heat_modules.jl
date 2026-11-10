@@ -63,9 +63,13 @@ function calculate_heat_int_values!(heat_int_work::MEAHeatIntWorkspace,
     C_O2_cgdl, C_O2_cgc = getproperty.(sv.cgdl, :C_O2), sv.cgc.C_O2
 
     C_N2_agc, C_N2_agdl = sv.agc.C_N2, getproperty.(sv.agdl, :C_N2)
+    C_O2_agc, C_O2_agdl = sv.agc.C_O2, getproperty.(sv.agdl, :C_O2)
     C_N2_ampl, C_N2_acl = getproperty.(sv.ampl, :C_N2), sv.acl.C_N2
+    C_O2_ampl, C_O2_acl = getproperty.(sv.ampl, :C_O2), sv.acl.C_O2
     C_N2_ccl, C_N2_cmpl = sv.ccl.C_N2, getproperty.(sv.cmpl, :C_N2)
+    C_H2_ccl, C_H2_cmpl = sv.ccl.C_H2, getproperty.(sv.cmpl, :C_H2)
     C_N2_cgdl, C_N2_cgc = getproperty.(sv.cgdl, :C_N2), sv.cgc.C_N2
+    C_H2_cgdl, C_H2_cgc = getproperty.(sv.cgdl, :C_H2), sv.cgc.C_H2
 
     lambda_acl, lambda_mem, lambda_ccl = sv.acl.lambda, sv.mem.lambda, sv.ccl.lambda
 
@@ -75,23 +79,22 @@ function calculate_heat_int_values!(heat_int_work::MEAHeatIntWorkspace,
 
     # Weighted harmonic means of the effective thermal conductivity
     k_th_eff_agc_agdl = k_th_eff(:agdl, T_agdl[1], C_v_agdl[1], s_agdl[1], nothing,
-                                 C_H2_agdl[1], nothing, C_N2_agdl[1], epsilon_gdl, nothing, epsilon_c, pp)
+                                 C_H2_agdl[1], C_O2_agdl[1], C_N2_agdl[1], epsilon_gdl, nothing, epsilon_c, pp; C_CO2=sv.agdl[1].C_CO2)
 
     k_th_eff_agdl_agdl = heat_int_work.k_th_eff_agdl_agdl
     @inbounds for i in 1:(nb_gdl - 1)
         k_th_eff_agdl_agdl[i] = hmean(
             k_th_eff(:agdl, T_agdl[i], C_v_agdl[i], s_agdl[i], nothing,
-                     C_H2_agdl[i], nothing, C_N2_agdl[i], epsilon_gdl, nothing, epsilon_c, pp),
+                     C_H2_agdl[i], C_O2_agdl[i], C_N2_agdl[i], epsilon_gdl, nothing, epsilon_c, pp; C_CO2=sv.agdl[i].C_CO2),
             k_th_eff(:agdl, T_agdl[i+1], C_v_agdl[i+1], s_agdl[i+1], nothing,
-                     C_H2_agdl[i+1], nothing, C_N2_agdl[i+1], epsilon_gdl, nothing, epsilon_c, pp)
+                     C_H2_agdl[i+1], C_O2_agdl[i+1], C_N2_agdl[i+1], epsilon_gdl, nothing, epsilon_c, pp; C_CO2=sv.agdl[i+1].C_CO2)
         )
     end
 
     k_th_eff_agdl_ampl = hmean(
         k_th_eff(:agdl, T_agdl[nb_gdl], C_v_agdl[nb_gdl], s_agdl[nb_gdl], nothing,
-             C_H2_agdl[nb_gdl], nothing, C_N2_agdl[nb_gdl], epsilon_gdl, nothing, epsilon_c, pp),
-        k_th_eff(:ampl, T_ampl[1], C_v_ampl[1], s_ampl[1], nothing, C_H2_ampl[1],
-             nothing, C_N2_ampl[1], epsilon_mpl, nothing, nothing, pp),
+             C_H2_agdl[nb_gdl], C_O2_agdl[nb_gdl], C_N2_agdl[nb_gdl], epsilon_gdl, nothing, epsilon_c, pp; C_CO2=sv.agdl[nb_gdl].C_CO2),
+        k_th_eff(:ampl, T_ampl[1], C_v_ampl[1], s_ampl[1], nothing, C_H2_ampl[1], C_O2_ampl[1], C_N2_ampl[1], epsilon_mpl, nothing, nothing, pp; C_CO2=sv.ampl[1].C_CO2),
         Hgdl_node / 2, Hmpl_node / 2
     )
 
@@ -99,35 +102,35 @@ function calculate_heat_int_values!(heat_int_work::MEAHeatIntWorkspace,
     @inbounds for i in 1:(nb_mpl - 1)
         k_th_eff_ampl_ampl[i] = hmean(
             k_th_eff(:ampl, T_ampl[i], C_v_ampl[i], s_ampl[i], nothing,
-                     C_H2_ampl[i], nothing, C_N2_ampl[i], epsilon_mpl, nothing, nothing, pp),
+                     C_H2_ampl[i], C_O2_ampl[i], C_N2_ampl[i], epsilon_mpl, nothing, nothing, pp; C_CO2=sv.ampl[i].C_CO2),
             k_th_eff(:ampl, T_ampl[i+1], C_v_ampl[i+1], s_ampl[i+1], nothing,
-                     C_H2_ampl[i+1], nothing, C_N2_ampl[i+1], epsilon_mpl, nothing, nothing, pp)
+                     C_H2_ampl[i+1], C_O2_ampl[i+1], C_N2_ampl[i+1], epsilon_mpl, nothing, nothing, pp; C_CO2=sv.ampl[i+1].C_CO2)
         )
     end
 
     k_th_eff_ampl_acl = hmean(
         k_th_eff(:ampl, T_ampl[nb_mpl], C_v_ampl[nb_mpl], s_ampl[nb_mpl], nothing,
-             C_H2_ampl[nb_mpl], nothing, C_N2_ampl[nb_mpl], epsilon_mpl, nothing, nothing, pp),
-        k_th_eff(:acl, T_acl, C_v_acl, s_acl, lambda_acl, C_H2_acl, nothing, C_N2_acl, nothing, Hacl, nothing, pp),
+             C_H2_ampl[nb_mpl], C_O2_ampl[nb_mpl], C_N2_ampl[nb_mpl], epsilon_mpl, nothing, nothing, pp; C_CO2=sv.ampl[nb_mpl].C_CO2),
+        k_th_eff(:acl, T_acl, C_v_acl, s_acl, lambda_acl, C_H2_acl, C_O2_acl, C_N2_acl, nothing, Hacl, nothing, pp; C_CO2=sv.acl.C_CO2),
         Hmpl_node / 2, Hacl / 2
     )
 
     k_th_eff_acl_mem = hmean(
-        k_th_eff(:acl, T_acl, C_v_acl, s_acl, lambda_acl, C_H2_acl, nothing, C_N2_acl, nothing, Hacl, nothing, pp),
+        k_th_eff(:acl, T_acl, C_v_acl, s_acl, lambda_acl, C_H2_acl, C_O2_acl, C_N2_acl, nothing, Hacl, nothing, pp; C_CO2=sv.acl.C_CO2),
         k_th_eff(:mem, T_mem, nothing, nothing, lambda_mem, nothing, nothing, nothing, nothing, nothing, nothing, pp),
         Hacl / 2, Hmem / 2
     )
 
     k_th_eff_mem_ccl = hmean(
         k_th_eff(:mem, T_mem, nothing, nothing, lambda_mem, nothing, nothing, nothing, nothing, nothing, nothing, pp),
-        k_th_eff(:ccl, T_ccl, C_v_ccl, s_ccl, lambda_ccl, nothing, C_O2_ccl, C_N2_ccl, nothing, Hccl, nothing, pp),
+        k_th_eff(:ccl, T_ccl, C_v_ccl, s_ccl, lambda_ccl, C_H2_ccl, C_O2_ccl, C_N2_ccl, nothing, Hccl, nothing, pp; C_CO2=sv.ccl.C_CO2),
         Hmem / 2, Hccl / 2
     )
 
     k_th_eff_ccl_cmpl = hmean(
-        k_th_eff(:ccl, T_ccl, C_v_ccl, s_ccl, lambda_ccl, nothing, C_O2_ccl, C_N2_ccl, nothing, Hccl, nothing, pp),
-        k_th_eff(:cmpl, T_cmpl[1], C_v_cmpl[1], s_cmpl[1], nothing, nothing, C_O2_cmpl[1],
-             C_N2_cmpl[1], epsilon_mpl, nothing, nothing, pp),
+        k_th_eff(:ccl, T_ccl, C_v_ccl, s_ccl, lambda_ccl, C_H2_ccl, C_O2_ccl, C_N2_ccl, nothing, Hccl, nothing, pp; C_CO2=sv.ccl.C_CO2),
+        k_th_eff(:cmpl, T_cmpl[1], C_v_cmpl[1], s_cmpl[1], nothing, C_H2_cmpl[1], C_O2_cmpl[1],
+             C_N2_cmpl[1], epsilon_mpl, nothing, nothing, pp; C_CO2=sv.cmpl[1].C_CO2),
         Hccl / 2, Hmpl_node / 2
     )
 
@@ -135,17 +138,17 @@ function calculate_heat_int_values!(heat_int_work::MEAHeatIntWorkspace,
     @inbounds for i in 1:(nb_mpl - 1)
         k_th_eff_cmpl_cmpl[i] = hmean(
             k_th_eff(:cmpl, T_cmpl[i], C_v_cmpl[i], s_cmpl[i], nothing,
-                     nothing, C_O2_cmpl[i], C_N2_cmpl[i], epsilon_mpl, nothing, nothing, pp),
+                     C_H2_cmpl[i], C_O2_cmpl[i], C_N2_cmpl[i], epsilon_mpl, nothing, nothing, pp; C_CO2=sv.cmpl[i].C_CO2),
             k_th_eff(:cmpl, T_cmpl[i+1], C_v_cmpl[i+1], s_cmpl[i+1], nothing,
-                     nothing, C_O2_cmpl[i+1], C_N2_cmpl[i+1], epsilon_mpl, nothing, nothing, pp)
+                     C_H2_cmpl[i+1], C_O2_cmpl[i+1], C_N2_cmpl[i+1], epsilon_mpl, nothing, nothing, pp; C_CO2=sv.cmpl[i+1].C_CO2)
         )
     end
 
     k_th_eff_cmpl_cgdl = hmean(
         k_th_eff(:cmpl, T_cmpl[nb_mpl], C_v_cmpl[nb_mpl], s_cmpl[nb_mpl], nothing,
-             nothing, C_O2_cmpl[nb_mpl], C_N2_cmpl[nb_mpl], epsilon_mpl, nothing, nothing, pp),
-        k_th_eff(:cgdl, T_cgdl[1], C_v_cgdl[1], s_cgdl[1], nothing, nothing, C_O2_cgdl[1],
-             C_N2_cgdl[1], epsilon_gdl, nothing, epsilon_c, pp),
+             C_H2_cmpl[nb_mpl], C_O2_cmpl[nb_mpl], C_N2_cmpl[nb_mpl], epsilon_mpl, nothing, nothing, pp; C_CO2=sv.cmpl[nb_mpl].C_CO2),
+        k_th_eff(:cgdl, T_cgdl[1], C_v_cgdl[1], s_cgdl[1], nothing, C_H2_cgdl[1], C_O2_cgdl[1],
+             C_N2_cgdl[1], epsilon_gdl, nothing, epsilon_c, pp; C_CO2=sv.cgdl[1].C_CO2),
         Hmpl_node / 2, Hgdl_node / 2
     )
 
@@ -153,15 +156,15 @@ function calculate_heat_int_values!(heat_int_work::MEAHeatIntWorkspace,
     @inbounds for i in 1:(nb_gdl - 1)
         k_th_eff_cgdl_cgdl[i] = hmean(
             k_th_eff(:cgdl, T_cgdl[i], C_v_cgdl[i], s_cgdl[i], nothing,
-                     nothing, C_O2_cgdl[i], C_N2_cgdl[i], epsilon_gdl, nothing, epsilon_c, pp),
+                     C_H2_cgdl[i], C_O2_cgdl[i], C_N2_cgdl[i], epsilon_gdl, nothing, epsilon_c, pp; C_CO2=sv.cgdl[i].C_CO2),
             k_th_eff(:cgdl, T_cgdl[i+1], C_v_cgdl[i+1], s_cgdl[i+1], nothing,
-                     nothing, C_O2_cgdl[i+1], C_N2_cgdl[i+1], epsilon_gdl, nothing, epsilon_c, pp)
+                     C_H2_cgdl[i+1], C_O2_cgdl[i+1], C_N2_cgdl[i+1], epsilon_gdl, nothing, epsilon_c, pp; C_CO2=sv.cgdl[i+1].C_CO2)
         )
     end
 
     k_th_eff_cgdl_cgc = k_th_eff(:cgdl, T_cgdl[nb_gdl], C_v_cgdl[nb_gdl],
-                                 s_cgdl[nb_gdl], nothing, nothing, C_O2_cgdl[nb_gdl], C_N2_cgdl[nb_gdl],
-                                 epsilon_gdl, nothing, epsilon_c, pp)
+                                 s_cgdl[nb_gdl], nothing, C_H2_cgdl[nb_gdl], C_O2_cgdl[nb_gdl], C_N2_cgdl[nb_gdl],
+                                 epsilon_gdl, nothing, epsilon_c, pp; C_CO2=sv.cgdl[nb_gdl].C_CO2)
 
     return (Hgdl_node, Hmpl_node, k_th_eff_agc_agdl, 
             k_th_eff_agdl_agdl, k_th_eff_agdl_ampl,
@@ -314,6 +317,8 @@ function k_th(component::Symbol, T)
         k = 1.5475e-4 + 9.4153e-5 * T_eff - 2.7529e-8 * T_eff^2 + 5.2069e-12 * T_eff^3
     elseif component == :N2  # For T >= 63 K and T <= 1500 K.
         k = -2.2678e-4 + 1.0275e-4 * T_eff - 6.0151e-8 * T_eff^2 + 2.2332e-11 * T_eff^3
+    elseif component == :CO2
+        k = -0.012765+9.0731e-5*T_eff-1.2466e-8*T_eff^2+1.9767e-12*T_eff^3
     else
         throw(ArgumentError("The element should be either 'H2O_l', 'H2O_v', 'H2', 'O2' or 'N2'."))
     end
@@ -422,7 +427,7 @@ function k_th_eff(element::Symbol,
                   epsilon::Union{Float64, Nothing}=nothing,
                   Hcl::Union{Float64, Nothing}=nothing,
                   epsilon_c::Union{Float64, Nothing}=nothing,
-                  pp::Union{PhysicalParams, Nothing}=nothing)
+                  pp::Union{PhysicalParams, Nothing}=nothing; C_CO2=0.0)
 
     if element == :agdl || element == :cgdl  # The effective thermal conductivity at the GDL.
         if C_v === nothing || s === nothing || C_N2 === nothing || epsilon === nothing || epsilon_c === nothing
@@ -433,22 +438,22 @@ function k_th_eff(element::Symbol,
             if C_H2 === nothing
                 throw(ArgumentError("C_H2 must be provided for 'agdl'."))
             end
-            sum_C = C_v + C_H2 + C_N2
+            sum_C = C_v + C_H2 + C_N2 + something(C_O2, 0.0) + C_CO2
             x_v, x_h2, x_n2 = C_v / sum_C, C_H2 / sum_C, C_N2 / sum_C
-            k_th_gaz = k_th_gaz_mixture((k_th(:H2O_v, T), k_th(:H2, T), k_th(:N2, T)),
-                                        (mu_gaz(:H2O_v, T), mu_gaz(:H2, T), mu_gaz(:N2, T)),
-                                        (x_v, x_h2, x_n2),
-                                        (M_H2O, M_H2, M_N2))
+            k_th_gaz = k_th_gaz_mixture((k_th(:H2O_v, T), k_th(:H2, T), k_th(:N2, T), k_th(:O2, T),k_th(:CO2,T)),
+                                        (mu_gaz(:H2O_v, T), mu_gaz(:H2, T), mu_gaz(:N2, T), mu_gaz(:O2, T),mu_gaz(:CO2,T)),
+                                        (x_v, x_h2, x_n2, something(C_O2, 0.0)/sum_C,C_CO2/sum_C),
+                                        (M_H2O, M_H2, M_N2, M_O2,M_CO2))
         else  # The thermal conductivity of the gas mixture in the CGDL.
             if C_O2 === nothing
                 throw(ArgumentError("C_O2 must be provided for 'cgdl'."))
             end
-            sum_C = C_v + C_O2 + C_N2
+            sum_C = C_v + C_O2 + C_N2 + something(C_H2, 0.0) + C_CO2
             x_v, x_o2, x_n2 = C_v / sum_C, C_O2 / sum_C, C_N2 / sum_C
-            k_th_gaz = k_th_gaz_mixture((k_th(:H2O_v, T), k_th(:O2, T), k_th(:N2, T)),
-                                        (mu_gaz(:H2O_v, T), mu_gaz(:O2, T), mu_gaz(:N2, T)),
-                                        (x_v, x_o2, x_n2),
-                                        (M_H2O, M_O2, M_N2))
+            k_th_gaz = k_th_gaz_mixture((k_th(:H2O_v, T), k_th(:O2, T), k_th(:N2, T), k_th(:H2, T),k_th(:CO2,T)),
+                                        (mu_gaz(:H2O_v, T), mu_gaz(:O2, T), mu_gaz(:N2, T), mu_gaz(:H2, T),mu_gaz(:CO2,T)),
+                                        (x_v, x_o2, x_n2, something(C_H2, 0.0)/sum_C,C_CO2/sum_C),
+                                        (M_H2O, M_O2, M_N2, M_H2,M_CO2))
         end
         k_th_gdl = pp.k_th_gdl  # Thermal conductivity of the GDL.
         return hmean((k_th_gdl * exp(beta3 * epsilon_c), k_th(:H2O_l, T), k_th_gaz),
@@ -462,22 +467,22 @@ function k_th_eff(element::Symbol,
             if C_H2 === nothing
                 throw(ArgumentError("C_H2 must be provided for 'ampl'."))
             end
-            sum_C = C_v + C_H2 + C_N2
+            sum_C = C_v + C_H2 + C_N2 + something(C_O2, 0.0) + C_CO2
             x_v, x_h2, x_n2 = C_v / sum_C, C_H2 / sum_C, C_N2 / sum_C
-            k_th_gaz = k_th_gaz_mixture((k_th(:H2O_v, T), k_th(:H2, T), k_th(:N2, T)),
-                                        (mu_gaz(:H2O_v, T), mu_gaz(:H2, T), mu_gaz(:N2, T)),
-                                        (x_v, x_h2, x_n2),
-                                        (M_H2O, M_H2, M_N2))
+            k_th_gaz = k_th_gaz_mixture((k_th(:H2O_v, T), k_th(:H2, T), k_th(:N2, T), k_th(:O2, T),k_th(:CO2,T)),
+                                        (mu_gaz(:H2O_v, T), mu_gaz(:H2, T), mu_gaz(:N2, T), mu_gaz(:O2, T),mu_gaz(:CO2,T)),
+                                        (x_v, x_h2, x_n2, something(C_O2, 0.0)/sum_C,C_CO2/sum_C),
+                                        (M_H2O, M_H2, M_N2, M_O2,M_CO2))
         else  # The thermal conductivity of the gas mixture in the CMPL.
             if C_O2 === nothing
                 throw(ArgumentError("C_O2 must be provided for 'cmpl'."))
             end
-            sum_C = C_v + C_O2 + C_N2
+            sum_C = C_v + C_O2 + C_N2 + something(C_H2, 0.0) + C_CO2
             x_v, x_o2, x_n2 = C_v / sum_C, C_O2 / sum_C, C_N2 / sum_C
-            k_th_gaz = k_th_gaz_mixture((k_th(:H2O_v, T), k_th(:O2, T), k_th(:N2, T)),
-                                        (mu_gaz(:H2O_v, T), mu_gaz(:O2, T), mu_gaz(:N2, T)),
-                                        (x_v, x_o2, x_n2),
-                                        (M_H2O, M_O2, M_N2))
+            k_th_gaz = k_th_gaz_mixture((k_th(:H2O_v, T), k_th(:O2, T), k_th(:N2, T), k_th(:H2, T),k_th(:CO2,T)),
+                                        (mu_gaz(:H2O_v, T), mu_gaz(:O2, T), mu_gaz(:N2, T), mu_gaz(:H2, T),mu_gaz(:CO2,T)),
+                                        (x_v, x_o2, x_n2, something(C_H2, 0.0)/sum_C,C_CO2/sum_C),
+                                        (M_H2O, M_O2, M_N2, M_H2,M_CO2))
         end
         k_th_mpl = pp.k_th_mpl  # Thermal conductivity of the MPL.
         return hmean((k_th_mpl, k_th(:H2O_l, T), k_th_gaz),
@@ -498,22 +503,22 @@ function k_th_eff(element::Symbol,
             if C_H2 === nothing
                 throw(ArgumentError("C_H2 must be provided for 'acl'."))
             end
-            sum_C = C_v + C_H2 + C_N2
+            sum_C = C_v + C_H2 + C_N2 + something(C_O2, 0.0) + C_CO2
             x_v, x_h2, x_n2 = C_v / sum_C, C_H2 / sum_C, C_N2 / sum_C
-            k_th_gaz = k_th_gaz_mixture((k_th(:H2O_v, T), k_th(:H2, T), k_th(:N2, T)),
-                                        (mu_gaz(:H2O_v, T), mu_gaz(:H2, T), mu_gaz(:N2, T)),
-                                        (x_v, x_h2, x_n2),
-                                        (M_H2O, M_H2, M_N2))
+            k_th_gaz = k_th_gaz_mixture((k_th(:H2O_v, T), k_th(:H2, T), k_th(:N2, T), k_th(:O2, T),k_th(:CO2,T)),
+                                        (mu_gaz(:H2O_v, T), mu_gaz(:H2, T), mu_gaz(:N2, T), mu_gaz(:O2, T),mu_gaz(:CO2,T)),
+                                        (x_v, x_h2, x_n2, something(C_O2, 0.0)/sum_C,C_CO2/sum_C),
+                                        (M_H2O, M_H2, M_N2, M_O2,M_CO2))
         else  # The thermal conductivity of the gas mixture in the CCL.
             if C_O2 === nothing
                 throw(ArgumentError("C_O2 must be provided for 'ccl'."))
             end
-            sum_C = C_v + C_O2 + C_N2
+            sum_C = C_v + C_O2 + C_N2 + something(C_H2, 0.0) + C_CO2
             x_v, x_o2, x_n2 = C_v / sum_C, C_O2 / sum_C, C_N2 / sum_C
-            k_th_gaz = k_th_gaz_mixture((k_th(:H2O_v, T), k_th(:O2, T), k_th(:N2, T)),
-                                        (mu_gaz(:H2O_v, T), mu_gaz(:O2, T), mu_gaz(:N2, T)),
-                                        (x_v, x_o2, x_n2),
-                                        (M_H2O, M_O2, M_N2))
+            k_th_gaz = k_th_gaz_mixture((k_th(:H2O_v, T), k_th(:O2, T), k_th(:N2, T), k_th(:H2, T),k_th(:CO2,T)),
+                                        (mu_gaz(:H2O_v, T), mu_gaz(:O2, T), mu_gaz(:N2, T), mu_gaz(:H2, T),mu_gaz(:CO2,T)),
+                                        (x_v, x_o2, x_n2, something(C_H2, 0.0)/sum_C,C_CO2/sum_C),
+                                        (M_H2O, M_O2, M_N2, M_H2,M_CO2))
         end
 
         k_th_cl = pp.k_th_cl  # Thermal conductivity of the CL.
@@ -565,6 +570,8 @@ function Cp0(component::Symbol, T)
     elseif component == :N2  # For T >= 100 K and T <= 500 K.
         cp = 1 / M_N2 * (28.98641 + 1.853978 * (T_eff / 1000) - 9.647459 * (T_eff / 1000)^2 +
                          16.63537 * (T_eff / 1000)^3 + 0.000117 / (T_eff / 1000)^2)
+    elseif component == :CO2
+        cp = (24.99735+55.18696*(T_eff/1000)-33.69137*(T_eff/1000)^2+7.948387*(T_eff/1000)^3-0.136638/(T_eff/1000)^2)/M_CO2
     else
         throw(ArgumentError("The element should be either 'H2O_l', 'H2O_v', 'H2', 'O2' or 'N2'."))
     end
@@ -644,7 +651,7 @@ function calculate_rho_Cp0(element::Symbol,
                            C_N2=nothing,
                            epsilon::Union{Float64, Nothing}=nothing,
                            Hcl::Union{Float64, Nothing}=nothing,
-                           pp::Union{PhysicalParams, Nothing}=nothing)
+                           pp::Union{PhysicalParams, Nothing}=nothing; C_CO2=0.0)
 
     if element == :agdl || element == :cgdl || element == :ampl || element == :cmpl
         if C_v === nothing || s === nothing || C_N2 === nothing || epsilon === nothing
@@ -658,7 +665,8 @@ function calculate_rho_Cp0(element::Symbol,
             rho_Cp0_gaz = (
                     M_H2O * C_v * Cp0(:H2O_v, T) +
                     M_H2 * C_H2 * Cp0(:H2, T) +
-                    M_N2 * C_N2 * Cp0(:N2, T)
+                    M_O2 * something(C_O2, 0.0) * Cp0(:O2, T) +
+                    M_N2 * C_N2 * Cp0(:N2, T) + M_CO2*C_CO2*Cp0(:CO2,T)
             )
         else  # In the cathode.
             if C_O2 === nothing
@@ -667,7 +675,8 @@ function calculate_rho_Cp0(element::Symbol,
             rho_Cp0_gaz = (
                     M_H2O * C_v * Cp0(:H2O_v, T) +
                     M_O2 * C_O2 * Cp0(:O2, T) +
-                    M_N2 * C_N2 * Cp0(:N2, T)
+                    M_H2 * something(C_H2, 0.0) * Cp0(:H2, T) +
+                    M_N2 * C_N2 * Cp0(:N2, T) + M_CO2*C_CO2*Cp0(:CO2,T)
             )
         end
 
@@ -696,7 +705,8 @@ function calculate_rho_Cp0(element::Symbol,
             rho_Cp0_gaz = (
                     M_H2O * C_v * Cp0(:H2O_v, T) +
                     M_H2 * C_H2 * Cp0(:H2, T) +
-                    M_N2 * C_N2 * Cp0(:N2, T)
+                    M_O2 * something(C_O2, 0.0) * Cp0(:O2, T) +
+                    M_N2 * C_N2 * Cp0(:N2, T) + M_CO2*C_CO2*Cp0(:CO2,T)
             )
         else  # The heat capacity of the gas mixture in the CCL.
             if C_O2 === nothing
@@ -705,7 +715,8 @@ function calculate_rho_Cp0(element::Symbol,
             rho_Cp0_gaz = (
                     M_H2O * C_v * Cp0(:H2O_v, T) +
                     M_O2 * C_O2 * Cp0(:O2, T) +
-                    M_N2 * C_N2 * Cp0(:N2, T)
+                    M_H2 * something(C_H2, 0.0) * Cp0(:H2, T) +
+                    M_N2 * C_N2 * Cp0(:N2, T) + M_CO2*C_CO2*Cp0(:CO2,T)
             )
         end
 

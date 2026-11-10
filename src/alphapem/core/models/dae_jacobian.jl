@@ -38,6 +38,10 @@ Fields
   each call; pre-allocated to avoid per-call allocation.
 - `diag_nz_indices` : for each state index `i`, the CSC storage index of `J[i,i]`,
   pre-cached to add the `γ·I` term on differential rows in O(n).
+- `nonnegative_columns`, `directions` : constrained inventory columns and their
+  current stencil (0 centered, +1 forward, -1 backward near the lower bound).
+- `local_step_columns` : trace-reactant columns whose perturbations resolve
+  their local concentration instead of the order-one reference scale.
 """
 struct JacobianColoringCache
     coloring_result
@@ -49,6 +53,34 @@ struct JacobianColoringCache
     res_minus::Vector{Float64}
     deltas::Vector{Float64}
     diag_nz_indices::Vector{Int}
+    nonnegative_columns::BitVector
+    directions::Vector{Int8}
+    local_step_columns::BitVector
+end
+
+"""Resolve trace reactants with a local step, retaining the usual step elsewhere.
+
+The scaled-state floor eps^(2/3) avoids vanishing differences at zero. For
+positive trace states, the step is much smaller than their concentration.
+"""
+@inline function _jacobian_fd_step(y, local_step)
+    base=cbrt(eps(Float64))
+    standard=base*max(abs(y),1.0)
+    local_step || return standard
+    return min(standard,max(base*abs(y),base^2))
+end
+
+"""Keep finite differences on the current side of a nonnegative-state boundary.
+
+A centered stencil across a clipped reaction state halves a linear decay
+derivative when its inventory is almost zero. Use the physical right derivative
+at zero, or a left stencil for a slightly negative Newton trial state.
+"""
+@inline function _jacobian_fd_direction(y, delta, nonnegative)
+    nonnegative || return Int8(0)
+    0<=y<delta && return Int8(1)
+    -delta<y<0 && return Int8(-1)
+    return Int8(0)
 end
 
 """Build a `JacobianColoringCache` from the Jacobian sparsity prototype.
@@ -60,7 +92,8 @@ The diagonal-index cache is computed here rather than in `simulate_model!`,
 centralising all Jacobian-related setup.
 """
 function _build_jacobian_coloring_cache(jac_prototype::SparseMatrixCSC,
-                                        differential_vars::BitVector)::JacobianColoringCache
+                                        differential_vars::BitVector;
+                                        nonnegative_indices=Int[],local_step_indices=Int[])::JacobianColoringCache
     n = size(jac_prototype, 1)
     n == size(jac_prototype, 2) ||
         throw(ArgumentError("jac_prototype must be square."))
@@ -99,8 +132,17 @@ function _build_jacobian_coloring_cache(jac_prototype::SparseMatrixCSC,
         diag_nz_indices[j] = diag_idx
     end
 
+    nonnegative_columns=falses(n)
+    for j in nonnegative_indices
+        nonnegative_columns[j]=true
+    end
+    local_step_columns=falses(n)
+    for j in local_step_indices
+        local_step_columns[j]=true
+    end
     return JacobianColoringCache(result, colors, nc, J_compressed,
-                                 y_work, res_plus, res_minus, deltas, diag_nz_indices)
+                                 y_work, res_plus, res_minus, deltas, diag_nz_indices,
+                                 nonnegative_columns,zeros(Int8,n),local_step_columns)
 end
 
 
@@ -230,7 +272,8 @@ function _build_dae_jacobian_prototype(residual!,
                                        initial_solver_derivatives::Vector{Float64},
                                        initial_solver_values::Vector{Float64},
                                        t0::Float64,
-                                       differential_vars::BitVector)::SparseMatrixCSC{Float64, Int}
+                                       differential_vars::BitVector;
+                                       nonnegative_indices=Int[],local_step_indices=Int[])::SparseMatrixCSC{Float64, Int}
     n = length(initial_solver_values)
     n == length(initial_solver_derivatives) ||
         throw(ArgumentError("State/derivative size mismatch in _build_dae_jacobian_prototype."))
@@ -251,7 +294,6 @@ function _build_dae_jacobian_prototype(residual!,
     # (the actual per-solve evaluator), so a coupling detected here is evaluated
     # with the same sensitivity there — no entry can be "seen" by the prototype
     # and then silently fall under the runtime FD noise floor, or vice versa.
-    fd_eps           = cbrt(eps(Float64))
     sensitivity_atol = 1e-14
 
     y_work              = Vector{Float64}(undef, n)
@@ -260,6 +302,14 @@ function _build_dae_jacobian_prototype(residual!,
     res_perturbed_minus = Vector{Float64}(undef, n)
 
     probe_states = _dae_jacobian_probe_states(initial_solver_values)
+    nonnegative_columns=falses(n)
+    for j in nonnegative_indices
+        nonnegative_columns[j]=true
+    end
+    local_step_columns=falses(n)
+    for j in local_step_indices
+        local_step_columns[j]=true
+    end
     for (probe_index, (y_probe, local_rtol)) in enumerate(probe_states)
         # Pass A (probe_index == 1) is y0 itself: if the residual cannot be
         # evaluated there, the model is broken and must fail loudly rather than
@@ -284,31 +334,32 @@ function _build_dae_jacobian_prototype(residual!,
         end
         evaluable || continue
 
-        # Central-FD sweep: perturb one solver variable j at a time and record
+    # FD sweep: perturb one solver variable j at a time and record
         # every row i with a non-negligible response, for this probe state.
         for j in 1:n
             yj    = y_probe[j]
-            delta = fd_eps * max(abs(yj), 1.0)  # adaptive step, scale-invariant near yj = 0.
+            delta = _jacobian_fd_step(yj,local_step_columns[j])
+            direction=_jacobian_fd_direction(yj,delta,nonnegative_columns[j])
 
             copyto!(y_work, y_probe)
-            y_work[j] = yj + delta
+            y_work[j] = yj + (direction<0 ? 0.0 : delta)
             try
                 residual!(res_perturbed_plus, initial_solver_derivatives, y_work, packed, t0)
             catch
                 continue  # column j non-evaluable at this probe: skip it, keep scanning.
             end
 
-            y_work[j] = yj - delta
+            y_work[j] = yj - (direction>0 ? 0.0 : delta)
             try
                 residual!(res_perturbed_minus, initial_solver_derivatives, y_work, packed, t0)
             catch
                 continue
             end
 
-            inv_2delta = 0.5 / delta
+            inv_spacing = (iszero(direction) ? 0.5 : 1.0) / delta
             @inbounds for i in 1:n
                 i == j && continue  # Diagonal already added; skip.
-                sensitivity = (res_perturbed_plus[i] - res_perturbed_minus[i]) * inv_2delta
+                sensitivity = (res_perturbed_plus[i] - res_perturbed_minus[i]) * inv_spacing
                 isfinite(sensitivity) || continue
                 # Mixed threshold: `local_rtol` is 0 for Pass B/C (absolute-only —
                 # see `_dae_jacobian_probe_states`), non-zero for Pass A. `local_scale`
@@ -340,7 +391,8 @@ end
 The matrix expected by IDA is:
     J = dF/dy + γ · dF/d(dy/dt)
 
-`dF/dy` is approximated by coloring-compressed central finite differences.
+`dF/dy` uses coloring-compressed centered differences, switching to one-sided
+differences for constrained Pt inventories within one FD step of zero.
 Same-colored columns are independent (no shared nonzero row by construction of
 the column coloring) and can be perturbed simultaneously, reducing the residual
 call count from 2n to 2·ncolors.
@@ -351,14 +403,20 @@ added analytically using the pre-cached `diag_nz_indices`.
 
 FD step choice
 --------------
-Per-column adaptive steps `δⱼ = cbrt(ε)·max(|yⱼ|,1)` match the original
-column-by-column implementation exactly.  When multiple columns of the same
+Ordinary steps are `δⱼ = cbrt(ε)·max(|yⱼ|,1)`. Selected trace-reactant columns
+use `max(cbrt(ε)·|yⱼ|, ε^(2/3))`, capped by the ordinary step.
+Near a nonnegative boundary,
+the stencil stays on the current side of zero. At zero it uses the physical
+right derivative. Prototype detection uses the same stencil as evaluation.
+When multiple columns of the same
 color group are perturbed simultaneously, each column j uses its own δⱼ.
 Due to color independence (no two same-colored columns share a nonzero row),
 row i only sees the contribution of one column j(i,c) per color group c, so:
-    (F⁺[i] − F⁻[i]) = 2·δ_{j(i,c)}·J[i, j(i,c)]
+    (F⁺[i] − F⁻[i]) = spacing_{j(i,c)}·J[i, j(i,c)]
 The raw difference (without δ-division) is stored in `J_compressed[:, c]`, and
-the per-column division 1/(2·δⱼ) is applied during decompression.
+the per-column division is applied during decompression. Spacing is 2δ for a
+centered stencil and δ for a one-sided stencil. Integrated states and the
+residual equations are never changed by this numerical derivative choice.
 """
 function _dae_jacobian_fd!(J,
                            dydt_IDA::Vector{Float64},
@@ -375,11 +433,10 @@ function _dae_jacobian_fd!(J,
     n == length(differential_vars) ||
         throw(ArgumentError("differential_vars size mismatch in _dae_jacobian_fd!."))
 
-    fd_eps = cbrt(eps(Float64))
-
-    # Compute per-column adaptive FD step sizes (mirrors the original formula).
+    # Use the same per-column step choice as sparsity detection.
     @inbounds for j in 1:n
-        cache.deltas[j] = fd_eps * max(abs(y[j]), 1.0)
+        cache.deltas[j] = _jacobian_fd_step(y[j],cache.local_step_columns[j])
+        cache.directions[j]=_jacobian_fd_direction(y[j],cache.deltas[j],cache.nonnegative_columns[j])
     end
 
     # Reset the compressed buffer and initialise the working state copy.
@@ -394,17 +451,17 @@ function _dae_jacobian_fd!(J,
     # are stored in J_compressed[:, c] for division during decompression.
     for c in 1:cache.ncolors_count
 
-        # Apply +δⱼ to every column in group c.
+        # Apply +δⱼ, or leave the base point for a backward stencil.
         @inbounds for j in 1:n
             cache.colors[j] == c || continue
-            cache.y_work[j] = y[j] + cache.deltas[j]
+            cache.y_work[j] = y[j] + (cache.directions[j]<0 ? 0.0 : cache.deltas[j])
         end
         residual!(cache.res_plus, dydt_IDA, cache.y_work, packed, t)
 
-        # Apply −δⱼ to every column in group c.
+        # Apply −δⱼ, or leave the base point for a forward stencil.
         @inbounds for j in 1:n
             cache.colors[j] == c || continue
-            cache.y_work[j] = y[j] - cache.deltas[j]
+            cache.y_work[j] = y[j] - (cache.directions[j]>0 ? 0.0 : cache.deltas[j])
         end
         residual!(cache.res_minus, dydt_IDA, cache.y_work, packed, t)
 
@@ -419,17 +476,15 @@ function _dae_jacobian_fd!(J,
     end
 
     # ── Decompression with per-column δ-division ─────────────────────────────
-    # J[i, j] = J_compressed[i, colors[j]] / (2·δⱼ) for each stored nonzero.
-    # Due to color independence, J_compressed[i, colors[j]] = F⁺[i] − F⁻[i]
-    # = 2·δⱼ·J[i,j], so dividing by 2·δⱼ recovers the correct entry.
+    # Divide each stored entry by its column's actual stencil spacing.
     fill!(J, 0.0)
     vals     = nonzeros(J)
     jac_rows = rowvals(J)
     @inbounds for j in 1:n
-        inv_2delta_j = 0.5 / cache.deltas[j]
+        inv_spacing_j = (iszero(cache.directions[j]) ? 0.5 : 1.0) / cache.deltas[j]
         c = cache.colors[j]
         for idx in nzrange(J, j)
-            vals[idx] = cache.J_compressed[jac_rows[idx], c] * inv_2delta_j
+            vals[idx] = cache.J_compressed[jac_rows[idx], c] * inv_spacing_j
         end
     end
 

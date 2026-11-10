@@ -592,14 +592,18 @@ function plot_P_1D_temporal(outputs::SimulationOutputs,
     C_v_agc = extract_mid_mea_series(outputs, cfg, mea -> mea.agc.C_v)
     C_H2_agc = extract_mid_mea_series(outputs, cfg, mea -> mea.agc.C_H2)
     C_N2_agc = extract_mid_mea_series(outputs, cfg, mea -> mea.agc.C_N2)
+    C_CO2_agc = extract_mid_mea_series(outputs,cfg,mea -> mea.agc.C_CO2)
+    C_O2_agc = extract_mid_mea_series(outputs, cfg, mea -> mea.agc.C_O2)
     T_agc = extract_mid_mea_series(outputs, cfg, mea -> mea.agc.T)
     C_v_cgc = extract_mid_mea_series(outputs, cfg, mea -> mea.cgc.C_v)
     C_O2_cgc = extract_mid_mea_series(outputs, cfg, mea -> mea.cgc.C_O2)
     C_N2_cgc = extract_mid_mea_series(outputs, cfg, mea -> mea.cgc.C_N2)
+    C_CO2_cgc = extract_mid_mea_series(outputs,cfg,mea -> mea.cgc.C_CO2)
+    C_H2_cgc = extract_mid_mea_series(outputs, cfg, mea -> mea.cgc.C_H2)
     T_cgc = extract_mid_mea_series(outputs, cfg, mea -> mea.cgc.T)
 
-    P_agc = (C_v_agc .+ C_H2_agc .+ C_N2_agc) .* R .* T_agc ./ 1e5
-    P_cgc = (C_v_cgc .+ C_O2_cgc .+ C_N2_cgc) .* R .* T_cgc ./ 1e5
+    P_agc = (C_v_agc .+ C_H2_agc .+ C_N2_agc .+ C_O2_agc .+ C_CO2_agc) .* R .* T_agc ./ 1e5
+    P_cgc = (C_v_cgc .+ C_O2_cgc .+ C_N2_cgc .+ C_H2_cgc .+ C_CO2_cgc) .* R .* T_cgc ./ 1e5
     Pa_in = extract_derived_series(outputs, x -> x.Pa_in) ./ 1e5
     Pc_in = extract_derived_series(outputs, x -> x.Pc_in) ./ 1e5
     Pa_out = fill(Pa_des / 1e5, length(t))

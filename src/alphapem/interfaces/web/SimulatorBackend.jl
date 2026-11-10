@@ -1532,9 +1532,9 @@ function _get_plot_data(simu, key, config)
         data = reshape(t, :, 1)
         for i in 1:nb_gc
             push!(headers, "Pa_$(i) (Pa)")
-            data = hcat(data, extract_mea_series(outputs, i, mea -> (mea.agc.C_H2 + mea.agc.C_v + mea.agc.C_N2) * R * mea.agc.T))
+            data = hcat(data, extract_mea_series(outputs, i, mea -> (mea.agc.C_H2 + mea.agc.C_v + mea.agc.C_N2 + mea.agc.C_O2 + mea.agc.C_CO2) * R * mea.agc.T))
             push!(headers, "Pc_$(i) (Pa)")
-            data = hcat(data, extract_mea_series(outputs, i, mea -> (mea.cgc.C_O2 + mea.cgc.C_v + mea.cgc.C_N2) * R * mea.cgc.T))
+            data = hcat(data, extract_mea_series(outputs, i, mea -> (mea.cgc.C_O2 + mea.cgc.C_v + mea.cgc.C_N2 + mea.cgc.C_H2 + mea.cgc.C_CO2) * R * mea.cgc.T))
         end
         return headers, data
 
